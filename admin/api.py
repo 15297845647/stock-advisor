@@ -78,7 +78,27 @@ async def dashboard():
     }
 
 
-# ────────────────────── 用户管理 ──────────────────────
+# ────────────────────── 用户管理（含 Bot 绑定）──────────────────────
+
+
+class CreateUserRequest(BaseModel):
+    user_id: str
+    nickname: str = ""
+    risk_level: str = "moderate"
+    trade_style: str = "swing"
+    bot_token: str = ""
+    bot_account_id: str = ""
+
+
+class UpdateProfileRequest(BaseModel):
+    nickname: str | None = None
+    risk_level: str | None = None
+    trade_style: str | None = None
+
+
+class UpdateBotRequest(BaseModel):
+    token: str
+    account_id: str
 
 
 @router.get("/users", dependencies=[Depends(verify_token)])
@@ -86,13 +106,50 @@ async def list_users():
     conn = await get_connection()
     try:
         rows = await conn.execute_fetchall(
-            "SELECT u.*, COUNT(w.stock_code) as watch_count "
-            "FROM users u LEFT JOIN user_watchlist w ON u.wechat_id = w.wechat_id "
+            "SELECT u.*, "
+            "  COUNT(w.stock_code) as watch_count, "
+            "  b.name as bot_name, b.token as bot_token, "
+            "  b.account_id as bot_account_id, b.status as bot_status "
+            "FROM users u "
+            "LEFT JOIN user_watchlist w ON u.wechat_id = w.wechat_id "
+            "LEFT JOIN bots b ON u.wechat_id = b.user_id "
             "GROUP BY u.wechat_id ORDER BY u.created_at DESC"
         )
         return [dict(r) for r in rows]
     finally:
         await conn.close()
+
+
+@router.post("/users", dependencies=[Depends(verify_token)])
+async def create_user(req: CreateUserRequest):
+    """创建用户 + 关联 Bot，同时写 users 表和 bots 表"""
+    from admin.bot_manager import regenerate_config
+
+    uid = req.user_id.strip()
+    if not uid:
+        raise HTTPException(400, "用户ID不能为空")
+
+    bot_name = f"bot-{uid}"
+    bot_status = "active" if req.bot_token.strip() else "pending"
+
+    conn = await get_connection()
+    try:
+        await conn.execute(
+            "INSERT INTO users (wechat_id, nickname, risk_level, trade_style) VALUES (?, ?, ?, ?)",
+            (uid, req.nickname or uid, req.risk_level, req.trade_style),
+        )
+        await conn.execute(
+            "INSERT INTO bots (name, user_id, token, account_id, status) VALUES (?, ?, ?, ?, ?)",
+            (bot_name, uid, req.bot_token.strip(), req.bot_account_id.strip(), bot_status),
+        )
+        await conn.commit()
+    except Exception as e:
+        raise HTTPException(400, f"创建失败（用户ID可能已存在）: {e}")
+    finally:
+        await conn.close()
+
+    await regenerate_config()
+    return {"ok": True, "user_id": uid, "bot_name": bot_name, "bot_status": bot_status}
 
 
 @router.get("/users/{wechat_id}", dependencies=[Depends(verify_token)])
@@ -102,6 +159,8 @@ async def get_user_detail(wechat_id: str):
         user_rows = await conn.execute_fetchall("SELECT * FROM users WHERE wechat_id = ?", (wechat_id,))
         if not user_rows:
             raise HTTPException(404, "用户不存在")
+
+        bot_rows = await conn.execute_fetchall("SELECT * FROM bots WHERE user_id = ?", (wechat_id,))
 
         watchlist = await conn.execute_fetchall(
             "SELECT stock_code, stock_name, added_at FROM user_watchlist WHERE wechat_id = ?", (wechat_id,)
@@ -116,18 +175,13 @@ async def get_user_detail(wechat_id: str):
         )
         return {
             "profile": dict(user_rows[0]),
+            "bot": dict(bot_rows[0]) if bot_rows else None,
             "watchlist": [dict(r) for r in watchlist],
             "memories": [dict(r) for r in memories],
             "recent_chat": [dict(r) for r in reversed(list(recent_chat))],
         }
     finally:
         await conn.close()
-
-
-class UpdateProfileRequest(BaseModel):
-    nickname: str | None = None
-    risk_level: str | None = None
-    trade_style: str | None = None
 
 
 @router.put("/users/{wechat_id}", dependencies=[Depends(verify_token)])
@@ -148,57 +202,49 @@ async def update_user(wechat_id: str, req: UpdateProfileRequest):
     return {"ok": True}
 
 
-# ────────────────────── Bot 管理 ──────────────────────
+@router.put("/users/{wechat_id}/bot", dependencies=[Depends(verify_token)])
+async def update_user_bot(wechat_id: str, req: UpdateBotRequest):
+    """更新用户的 Bot 绑定信息"""
+    from admin.bot_manager import regenerate_config
 
-
-class AddBotRequest(BaseModel):
-    user_id: str
-    token: str = ""
-    account_id: str = ""
-
-
-class UpdateBotTokenRequest(BaseModel):
-    token: str
-    account_id: str
-
-
-@router.get("/bots", dependencies=[Depends(verify_token)])
-async def api_list_bots():
-    from admin.bot_manager import list_bots
-    return await list_bots()
-
-
-@router.post("/bots", dependencies=[Depends(verify_token)])
-async def api_add_bot(req: AddBotRequest):
-    from admin.bot_manager import add_bot
-    if not req.user_id.strip():
-        raise HTTPException(400, "用户ID不能为空")
+    conn = await get_connection()
     try:
-        bot = await add_bot(
-            req.user_id.strip(),
-            token=req.token.strip(),
-            account_id=req.account_id.strip(),
+        await conn.execute(
+            "UPDATE bots SET token = ?, account_id = ?, status = 'active' WHERE user_id = ?",
+            (req.token.strip(), req.account_id.strip(), wechat_id),
         )
-    except Exception as e:
-        raise HTTPException(400, f"添加失败: {e}")
-    return bot
+        await conn.commit()
+    finally:
+        await conn.close()
 
-
-@router.delete("/bots/{name}", dependencies=[Depends(verify_token)])
-async def api_delete_bot(name: str):
-    from admin.bot_manager import delete_bot
-    await delete_bot(name)
+    await regenerate_config()
     return {"ok": True}
 
 
-@router.put("/bots/{name}/token", dependencies=[Depends(verify_token)])
-async def api_update_bot_token(name: str, req: UpdateBotTokenRequest):
-    from admin.bot_manager import update_bot_token
-    await update_bot_token(name, req.token, req.account_id)
+@router.delete("/users/{wechat_id}", dependencies=[Depends(verify_token)])
+async def delete_user(wechat_id: str):
+    """删除用户 + 关联 Bot + 重新生成 config"""
+    from admin.bot_manager import regenerate_config
+
+    conn = await get_connection()
+    try:
+        await conn.execute("DELETE FROM bots WHERE user_id = ?", (wechat_id,))
+        await conn.execute("DELETE FROM user_watchlist WHERE wechat_id = ?", (wechat_id,))
+        await conn.execute("DELETE FROM user_memory WHERE wechat_id = ?", (wechat_id,))
+        await conn.execute("DELETE FROM chat_history WHERE wechat_id = ?", (wechat_id,))
+        await conn.execute("DELETE FROM users WHERE wechat_id = ?", (wechat_id,))
+        await conn.commit()
+    finally:
+        await conn.close()
+
+    await regenerate_config()
     return {"ok": True}
 
 
-@router.post("/bots/restart", dependencies=[Depends(verify_token)])
+# ────────────────────── cc-connect 重启 ──────────────────────
+
+
+@router.post("/restart", dependencies=[Depends(verify_token)])
 async def api_restart_cc():
     from admin.bot_manager import restart_cc_connect
     msg = restart_cc_connect()

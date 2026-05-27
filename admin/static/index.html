@@ -70,19 +70,83 @@
           </div>
         </div>
 
-        <!-- 用户管理 -->
+        <!-- 用户管理（含 Bot 绑定）-->
         <div x-show="page==='users'" class="fade-in">
           <h2 class="text-xl font-bold mb-6">用户管理</h2>
-          <!-- 列表 -->
+
+          <!-- 列表视图 -->
           <div x-show="!selectedUser">
+
+            <!-- 操作栏：添加 + 重启 -->
+            <div class="flex items-start gap-4 mb-6">
+              <button @click="showAddUser=!showAddUser"
+                      class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition">
+                <span x-text="showAddUser?'收起':'+ 添加用户'"></span>
+              </button>
+              <button @click="restartCC()" class="bg-gray-800 text-white px-4 py-2 rounded-lg text-sm hover:bg-gray-900 transition">
+                重启 cc-connect
+              </button>
+              <span x-show="restartMsg" class="text-green-600 text-sm leading-9" x-text="restartMsg"></span>
+            </div>
+
+            <!-- 添加用户表单（含 Bot 字段）-->
+            <div x-show="showAddUser" class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6 max-w-2xl fade-in">
+              <h3 class="font-medium mb-2">添加新用户</h3>
+              <p class="text-xs text-gray-400 mb-4">创建用户时同步配置 Bot 接入。先在服务器执行 <code class="bg-gray-100 px-1 rounded">cc-connect weixin setup --project bot-用户ID</code> 获取 token。</p>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">用户ID <span class="text-red-400">*</span></label>
+                  <input type="text" x-model="newUser.user_id" placeholder="英文标识，如 zhangsan"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">昵称</label>
+                  <input type="text" x-model="newUser.nickname" placeholder="显示名"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">风险偏好</label>
+                  <select x-model="newUser.risk_level" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    <option value="conservative">保守</option>
+                    <option value="moderate">稳健</option>
+                    <option value="aggressive">激进</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">交易风格</label>
+                  <select x-model="newUser.trade_style" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                    <option value="day">日内</option>
+                    <option value="swing">波段</option>
+                    <option value="long">长线</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Bot Token</label>
+                  <input type="text" x-model="newUser.bot_token" placeholder="ilink token（可稍后补填）"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Bot Account ID</label>
+                  <input type="text" x-model="newUser.bot_account_id" placeholder="account_id（可稍后补填）"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                </div>
+              </div>
+              <div class="mt-4 flex items-center gap-3">
+                <button @click="createUser()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">创建用户</button>
+                <p x-show="createUserMsg" class="text-sm" :class="createUserErr?'text-red-500':'text-green-600'" x-text="createUserMsg"></p>
+              </div>
+            </div>
+
+            <!-- 用户列表 -->
             <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <table class="w-full text-sm">
                 <thead class="bg-gray-50 text-gray-500 text-left">
                   <tr>
-                    <th class="px-4 py-3 font-medium">微信ID</th>
+                    <th class="px-4 py-3 font-medium">用户ID</th>
                     <th class="px-4 py-3 font-medium">昵称</th>
                     <th class="px-4 py-3 font-medium">风险偏好</th>
                     <th class="px-4 py-3 font-medium">交易风格</th>
+                    <th class="px-4 py-3 font-medium">Bot 状态</th>
                     <th class="px-4 py-3 font-medium">关注数</th>
                     <th class="px-4 py-3 font-medium">注册时间</th>
                     <th class="px-4 py-3 font-medium">操作</th>
@@ -95,27 +159,34 @@
                       <td class="px-4 py-3" x-text="u.nickname||'-'"></td>
                       <td class="px-4 py-3" x-text="u.risk_level"></td>
                       <td class="px-4 py-3" x-text="u.trade_style"></td>
-                      <td class="px-4 py-3" x-text="u.watch_count"></td>
-                      <td class="px-4 py-3 text-gray-400" x-text="u.created_at?.slice(0,10)"></td>
                       <td class="px-4 py-3">
-                        <button @click="viewUser(u.wechat_id)" class="text-blue-600 hover:underline">详情</button>
+                        <span :class="u.bot_status==='active'?'bg-green-100 text-green-700': u.bot_status==='pending'?'bg-yellow-100 text-yellow-700':'bg-gray-100 text-gray-500'"
+                              class="px-2 py-0.5 rounded-full text-xs font-medium"
+                              x-text="u.bot_status==='active'?'已绑定': u.bot_status==='pending'?'待绑定':'未配置'"></span>
+                      </td>
+                      <td class="px-4 py-3" x-text="u.watch_count"></td>
+                      <td class="px-4 py-3 text-gray-400 text-xs" x-text="u.created_at?.slice(0,10)"></td>
+                      <td class="px-4 py-3 space-x-2">
+                        <button @click="viewUser(u.wechat_id)" class="text-blue-600 hover:underline text-xs">详情</button>
+                        <button @click="deleteUser(u.wechat_id, u.nickname||u.wechat_id)" class="text-red-500 hover:underline text-xs">删除</button>
                       </td>
                     </tr>
                   </template>
                 </tbody>
               </table>
-              <div x-show="users.length===0" class="text-center py-12 text-gray-400">暂无用户</div>
+              <div x-show="users.length===0" class="text-center py-12 text-gray-400">暂无用户，点击"添加用户"开始</div>
             </div>
           </div>
-          <!-- 详情 -->
+
+          <!-- 用户详情 -->
           <div x-show="selectedUser" class="fade-in">
             <button @click="selectedUser=null" class="text-sm text-blue-600 hover:underline mb-4 inline-block">&larr; 返回列表</button>
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <!-- 基本信息 -->
               <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
                 <h3 class="font-medium mb-4">用户信息</h3>
                 <div class="space-y-3 text-sm">
-                  <div><span class="text-gray-500 w-20 inline-block">微信ID</span><span class="font-mono" x-text="selectedUser.profile?.wechat_id"></span></div>
+                  <div><span class="text-gray-500 w-20 inline-block">用户ID</span><span class="font-mono" x-text="selectedUser.profile?.wechat_id"></span></div>
                   <div><span class="text-gray-500 w-20 inline-block">昵称</span>
                     <input x-model="editProfile.nickname" class="border border-gray-200 rounded px-2 py-1 w-40">
                   </div>
@@ -137,6 +208,36 @@
                   <span x-show="profileSaved" class="text-green-600 text-sm ml-2">已保存</span>
                 </div>
               </div>
+
+              <!-- Bot 绑定信息 -->
+              <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                <h3 class="font-medium mb-4">Bot 绑定</h3>
+                <template x-if="selectedUser.bot">
+                  <div class="space-y-3 text-sm">
+                    <div class="flex items-center gap-2">
+                      <span class="text-gray-500 w-24 inline-block">状态</span>
+                      <span :class="selectedUser.bot.status==='active'?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'"
+                            class="px-2 py-0.5 rounded-full text-xs font-medium"
+                            x-text="selectedUser.bot.status==='active'?'已绑定':'待绑定'"></span>
+                    </div>
+                    <div><span class="text-gray-500 w-24 inline-block">Bot 名称</span><span class="font-mono text-xs" x-text="selectedUser.bot.name"></span></div>
+                    <div>
+                      <label class="text-gray-500 text-sm block mb-1">Token</label>
+                      <input x-model="editBot.token" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+                    </div>
+                    <div>
+                      <label class="text-gray-500 text-sm block mb-1">Account ID</label>
+                      <input x-model="editBot.account_id" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+                    </div>
+                    <button @click="saveBot()" class="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 transition">保存 Bot 配置</button>
+                    <span x-show="botSaved" class="text-green-600 text-sm ml-2">已保存</span>
+                  </div>
+                </template>
+                <template x-if="!selectedUser.bot">
+                  <p class="text-gray-400 text-sm">该用户暂无 Bot 绑定</p>
+                </template>
+              </div>
+
               <!-- 关注列表 -->
               <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
                 <h3 class="font-medium mb-4">关注列表</h3>
@@ -178,100 +279,6 @@
               </div>
             </div>
           </div>
-        </div>
-
-        <!-- Bot 管理 -->
-        <div x-show="page==='bots'" class="fade-in">
-          <h2 class="text-xl font-bold mb-6">Bot 管理</h2>
-
-          <!-- 添加 Bot -->
-          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6 max-w-xl">
-            <h3 class="font-medium mb-4">添加新用户 Bot</h3>
-            <p class="text-xs text-gray-400 mb-4">先在服务器执行 <code class="bg-gray-100 px-1 rounded">cc-connect weixin setup --project bot-用户名</code> 获取 token，再在此填写。</p>
-            <div class="space-y-3">
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">用户ID <span class="text-red-400">*</span></label>
-                <input type="text" x-model="newBot.user_id" placeholder="英文标识，如 zhangsan"
-                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Token <span class="text-red-400">*</span></label>
-                <input type="text" x-model="newBot.token" placeholder="扫码绑定后获得的 ilink token"
-                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Account ID <span class="text-red-400">*</span></label>
-                <input type="text" x-model="newBot.account_id" placeholder="扫码绑定后获得的 account_id"
-                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
-              </div>
-              <button @click="addBot()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">添加并生成配置</button>
-              <p x-show="addBotMsg" class="text-sm" :class="addBotErr?'text-red-500':'text-green-600'" x-text="addBotMsg"></p>
-            </div>
-          </div>
-
-          <!-- Bot 列表 -->
-          <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-6">
-            <table class="w-full text-sm">
-              <thead class="bg-gray-50 text-gray-500 text-left">
-                <tr>
-                  <th class="px-4 py-3 font-medium">Bot 名称</th>
-                  <th class="px-4 py-3 font-medium">用户ID</th>
-                  <th class="px-4 py-3 font-medium">状态</th>
-                  <th class="px-4 py-3 font-medium">Token</th>
-                  <th class="px-4 py-3 font-medium">创建时间</th>
-                  <th class="px-4 py-3 font-medium">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <template x-for="b in bots" :key="b.name">
-                  <tr class="border-t border-gray-50 hover:bg-gray-50/50">
-                    <td class="px-4 py-3 font-mono text-xs" x-text="b.name"></td>
-                    <td class="px-4 py-3" x-text="b.user_id"></td>
-                    <td class="px-4 py-3">
-                      <span :class="b.status==='active'?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'"
-                            class="px-2 py-0.5 rounded-full text-xs font-medium" x-text="b.status==='active'?'已绑定':'待绑定'"></span>
-                    </td>
-                    <td class="px-4 py-3 font-mono text-xs text-gray-400" x-text="b.token ? b.token.slice(0,12)+'...' : '未设置'"></td>
-                    <td class="px-4 py-3 text-gray-400 text-xs" x-text="b.created_at?.slice(0,10)"></td>
-                    <td class="px-4 py-3 space-x-2">
-                      <button @click="editBotToken(b)" class="text-blue-600 hover:underline text-xs">设置Token</button>
-                      <button @click="deleteBot(b.name)" class="text-red-500 hover:underline text-xs">删除</button>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-            <div x-show="bots.length===0" class="text-center py-12 text-gray-400">暂无 Bot</div>
-          </div>
-
-          <!-- 设置 Token 弹窗 -->
-          <div x-show="editingBot" class="fixed inset-0 bg-black/30 flex items-center justify-center z-50" @click.self="editingBot=null">
-            <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md fade-in">
-              <h3 class="font-bold mb-4">设置 Token — <span x-text="editingBot?.name"></span></h3>
-              <div class="space-y-3">
-                <div>
-                  <label class="text-sm text-gray-500 block mb-1">Token</label>
-                  <input type="text" x-model="editBotForm.token" placeholder="扫码后获得的 token"
-                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
-                </div>
-                <div>
-                  <label class="text-sm text-gray-500 block mb-1">Account ID</label>
-                  <input type="text" x-model="editBotForm.account_id" placeholder="扫码后获得的 account_id"
-                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
-                </div>
-              </div>
-              <div class="flex gap-3 mt-5">
-                <button @click="saveBotToken()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存</button>
-                <button @click="editingBot=null" class="text-gray-500 hover:text-gray-700 text-sm">取消</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 重启按钮 -->
-          <button @click="restartCC()" class="bg-gray-800 text-white px-5 py-2 rounded-lg text-sm hover:bg-gray-900 transition">
-            重启 cc-connect
-          </button>
-          <span x-show="restartMsg" class="text-green-600 text-sm ml-3" x-text="restartMsg"></span>
         </div>
 
         <!-- 配置管理 -->
@@ -323,19 +330,17 @@ function admin() {
     dash: {},
     stats: [],
 
-    // users
+    // users (unified with bot)
     users: [],
     selectedUser: null,
     editProfile: {},
     profileSaved: false,
-
-    // bots
-    bots: [],
-    newBot: { user_id: '', token: '', account_id: '' },
-    addBotMsg: '',
-    addBotErr: false,
-    editingBot: null,
-    editBotForm: { token: '', account_id: '' },
+    showAddUser: false,
+    newUser: { user_id: '', nickname: '', risk_level: 'moderate', trade_style: 'swing', bot_token: '', bot_account_id: '' },
+    createUserMsg: '',
+    createUserErr: false,
+    editBot: { token: '', account_id: '' },
+    botSaved: false,
     restartMsg: '',
 
     // config
@@ -345,17 +350,15 @@ function admin() {
     cfgSavedMsg: '',
 
     menu: [
-      { key: 'dashboard', label: '仪表盘', load() { this.loadDashboard?.() } },
-      { key: 'bots', label: 'Bot 管理', load() { this.loadBots?.() } },
-      { key: 'users', label: '用户管理', load() { this.loadUsers?.() } },
-      { key: 'config', label: '配置管理', load() { this.loadConfig?.() } },
+      { key: 'dashboard', label: '仪表盘' },
+      { key: 'users', label: '用户管理' },
+      { key: 'config', label: '配置管理' },
     ],
 
     async init() {
       this.menu[0].load = () => this.loadDashboard();
-      this.menu[1].load = () => this.loadBots();
-      this.menu[2].load = () => this.loadUsers();
-      this.menu[3].load = () => this.loadConfig();
+      this.menu[1].load = () => this.loadUsers();
+      this.menu[2].load = () => this.loadConfig();
       if (this.token) await this.loadDashboard();
     },
 
@@ -381,6 +384,7 @@ function admin() {
       return r.json();
     },
 
+    // ── Dashboard ──
     async loadDashboard() {
       const d = await this.api('/api/dashboard');
       if (!d) return;
@@ -393,9 +397,29 @@ function admin() {
       ];
     },
 
+    // ── Users ──
     async loadUsers() {
       const d = await this.api('/api/users');
       if (d) this.users = d;
+    },
+
+    async createUser() {
+      this.createUserMsg = ''; this.createUserErr = false;
+      if (!this.newUser.user_id.trim()) { this.createUserMsg = '请输入用户ID'; this.createUserErr = true; return; }
+      try {
+        const r = await fetch('/api/users', { method:'POST', headers:this.headers(), body:JSON.stringify(this.newUser) });
+        const d = await r.json();
+        if (!r.ok) { this.createUserMsg = d.detail || '创建失败'; this.createUserErr = true; return; }
+        this.createUserMsg = `用户 ${d.user_id} 已创建（Bot: ${d.bot_status}），请重启 cc-connect 生效`;
+        this.newUser = { user_id: '', nickname: '', risk_level: 'moderate', trade_style: 'swing', bot_token: '', bot_account_id: '' };
+        await this.loadUsers();
+      } catch(e) { this.createUserMsg = '请求失败'; this.createUserErr = true; }
+    },
+
+    async deleteUser(id, name) {
+      if (!confirm(`确定删除用户 "${name}"？将同时删除其 Bot 配置、关注列表、记忆和对话记录。`)) return;
+      await this.api('/api/users/' + id, { method:'DELETE' });
+      await this.loadUsers();
     },
 
     async viewUser(id) {
@@ -407,7 +431,12 @@ function admin() {
         risk_level: d.profile?.risk_level || 'moderate',
         trade_style: d.profile?.trade_style || 'swing',
       };
+      this.editBot = {
+        token: d.bot?.token || '',
+        account_id: d.bot?.account_id || '',
+      };
       this.profileSaved = false;
+      this.botSaved = false;
     },
 
     async saveProfile() {
@@ -418,56 +447,24 @@ function admin() {
       setTimeout(() => this.profileSaved = false, 2000);
     },
 
-    async loadBots() {
-      const d = await this.api('/api/bots');
-      if (d) this.bots = d;
-    },
-
-    async addBot() {
-      this.addBotMsg = ''; this.addBotErr = false;
-      const { user_id, token, account_id } = this.newBot;
-      if (!user_id.trim()) { this.addBotMsg = '请输入用户ID'; this.addBotErr = true; return; }
-      if (!token.trim()) { this.addBotMsg = '请输入 Token'; this.addBotErr = true; return; }
-      if (!account_id.trim()) { this.addBotMsg = '请输入 Account ID'; this.addBotErr = true; return; }
-      try {
-        const r = await fetch('/api/bots', { method:'POST', headers:this.headers(), body:JSON.stringify({
-          user_id: user_id.trim(), token: token.trim(), account_id: account_id.trim()
-        })});
-        const d = await r.json();
-        if (!r.ok) { this.addBotMsg = d.detail || '添加失败'; this.addBotErr = true; return; }
-        this.addBotMsg = `Bot ${d.name} 已添加，点击"重启 cc-connect"生效`;
-        this.newBot = { user_id: '', token: '', account_id: '' };
-        await this.loadBots();
-      } catch(e) { this.addBotMsg = '请求失败'; this.addBotErr = true; }
-    },
-
-    async deleteBot(name) {
-      if (!confirm(`确定删除 ${name}？`)) return;
-      await this.api('/api/bots/' + name, { method:'DELETE' });
-      await this.loadBots();
-    },
-
-    editBotToken(bot) {
-      this.editingBot = bot;
-      this.editBotForm = { token: bot.token || '', account_id: bot.account_id || '' };
-    },
-
-    async saveBotToken() {
-      if (!this.editingBot) return;
-      await this.api('/api/bots/' + this.editingBot.name + '/token', {
-        method:'PUT', body:JSON.stringify(this.editBotForm)
-      });
-      this.editingBot = null;
-      await this.loadBots();
+    async saveBot() {
+      const id = this.selectedUser?.profile?.wechat_id;
+      if (!id) return;
+      await this.api('/api/users/' + id + '/bot', { method:'PUT', body:JSON.stringify(this.editBot) });
+      this.botSaved = true;
+      const d = await this.api('/api/users/' + id);
+      if (d) { this.selectedUser = d; this.editBot = { token: d.bot?.token || '', account_id: d.bot?.account_id || '' }; }
+      setTimeout(() => this.botSaved = false, 2000);
     },
 
     async restartCC() {
       this.restartMsg = '重启中...';
-      const d = await this.api('/api/bots/restart', { method:'POST' });
+      const d = await this.api('/api/restart', { method:'POST' });
       this.restartMsg = d?.message || '已发送重启命令';
       setTimeout(() => this.restartMsg = '', 5000);
     },
 
+    // ── Config ──
     async loadConfig() {
       const d = await this.api('/api/config');
       if (d) { this.cfg = d; this.newPassword = ''; this.cfgSaved = false; }
