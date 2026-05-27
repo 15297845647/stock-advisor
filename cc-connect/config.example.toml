@@ -1,0 +1,25 @@
+# cc-connect 配置示例
+# 复制到 ~/.cc-connect/config.toml 并修改
+
+[[projects]]
+name = "stock-advisor"
+work_dir = "/Users/shy/stock-advisor"
+
+[projects.agent]
+type = "acp"
+command = "python"
+args = ["agent/main.py"]
+
+[projects.agent.env]
+MINIMAX_API_KEY = "your-minimax-api-key"
+PYTHONPATH = "/Users/shy/stock-advisor"
+DB_PATH = "/Users/shy/stock-advisor/data/stock_advisor.db"
+
+[[projects.platforms]]
+type = "weixin"
+
+[projects.platforms.options]
+# token 由 cc-connect weixin setup 扫码后自动填入
+token = ""
+# 允许使用机器人的微信用户ID，逗号分隔；"*" 表示不限制
+allow_from = "*"

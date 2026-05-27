@@ -1,0 +1,28 @@
+请对以下股票进行综合技术面分析：
+
+【股票信息】
+- 代码：{stock_code}
+- 名称：{stock_name}
+- 最新价：{price}  涨跌幅：{change_pct}%
+
+【技术指标】
+- 均线：MA5={ma5} MA10={ma10} MA20={ma20} {ma60_line}
+- MACD：DIF={macd} DEA={macd_signal} 柱状={macd_hist}
+- RSI(14)：{rsi_14}
+- KDJ：K={kdj_k} D={kdj_d} J={kdj_j}
+- 布林带：上轨={boll_upper} 中轨={boll_mid} 下轨={boll_lower}
+- 趋势判断：{trend}
+- 支撑位：{support}  压力位：{resistance}
+
+【近5日资金流向】
+{fund_flow_text}
+
+【近10日K线摘要】
+{kline_summary}
+
+请从以下维度分析：
+1. 趋势研判（短期/中期）
+2. 关键价位（支撑/压力）
+3. 技术指标信号（金叉/死叉/超买超卖）
+4. 资金面态势
+5. 操作建议（看多/看空/观望 + 理由）

@@ -1,0 +1,15 @@
+【用户画像】
+- 风险偏好：{risk_level}
+- 交易风格：{trade_style}
+
+【用户长期记忆】
+{memories_text}
+
+【关注列表】
+{watchlist_text}
+
+【近期对话】
+{chat_history_text}
+
+【当前问题】
+{user_message}

@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stock Advisor — 管理后台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    .fade-in { animation: fadeIn .25s ease-out; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800 min-h-screen" x-data="admin()" x-cloak>
+
+  <!-- 登录遮罩 -->
+  <template x-if="!token">
+    <div class="flex items-center justify-center min-h-screen">
+      <div class="bg-white rounded-2xl shadow-xl p-8 w-full max-w-sm fade-in">
+        <h1 class="text-2xl font-bold text-center mb-6">Stock Advisor</h1>
+        <p class="text-gray-500 text-center text-sm mb-6">管理后台登录</p>
+        <input type="password" x-model="password" @keydown.enter="doLogin()"
+               placeholder="请输入管理密码" class="w-full border border-gray-200 rounded-lg px-4 py-2.5 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+        <button @click="doLogin()" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2.5 rounded-lg font-medium transition">登 录</button>
+        <p x-show="loginErr" class="text-red-500 text-sm text-center mt-3" x-text="loginErr"></p>
+      </div>
+    </div>
+  </template>
+
+  <!-- 主体 -->
+  <template x-if="token">
+    <div class="flex min-h-screen">
+      <!-- 侧边栏 -->
+      <aside class="w-56 bg-white border-r border-gray-100 py-6 px-4 flex flex-col">
+        <h1 class="text-lg font-bold mb-8 px-2">Stock Advisor</h1>
+        <nav class="flex flex-col gap-1 flex-1">
+          <template x-for="item in menu" :key="item.key">
+            <button @click="page=item.key; item.load && item.load()"
+                    :class="page===item.key ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-50'"
+                    class="text-left px-3 py-2 rounded-lg text-sm transition" x-text="item.label"></button>
+          </template>
+        </nav>
+        <button @click="logout()" class="text-left px-3 py-2 text-gray-400 hover:text-red-500 text-sm mt-4 transition">退出登录</button>
+      </aside>
+
+      <!-- 内容区 -->
+      <main class="flex-1 p-8 overflow-auto">
+
+        <!-- Dashboard -->
+        <div x-show="page==='dashboard'" class="fade-in">
+          <h2 class="text-xl font-bold mb-6">仪表盘</h2>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <template x-for="s in stats" :key="s.label">
+              <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                <div class="text-sm text-gray-500" x-text="s.label"></div>
+                <div class="text-2xl font-bold mt-1" x-text="s.value"></div>
+              </div>
+            </template>
+          </div>
+          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+            <h3 class="font-medium mb-3">系统信息</h3>
+            <div class="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+              <span class="text-gray-500">MiniMax 模型</span><span x-text="dash.minimax_model||'-'"></span>
+              <span class="text-gray-500">API Key 已设置</span><span x-text="dash.minimax_key_set?'是':'否'"></span>
+              <span class="text-gray-500">数据库大小</span><span x-text="(dash.db_size_mb||0)+' MB'"></span>
+              <span class="text-gray-500">最后活动时间</span><span x-text="dash.last_activity||'无'"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 用户管理 -->
+        <div x-show="page==='users'" class="fade-in">
+          <h2 class="text-xl font-bold mb-6">用户管理</h2>
+          <!-- 列表 -->
+          <div x-show="!selectedUser">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+              <table class="w-full text-sm">
+                <thead class="bg-gray-50 text-gray-500 text-left">
+                  <tr>
+                    <th class="px-4 py-3 font-medium">微信ID</th>
+                    <th class="px-4 py-3 font-medium">昵称</th>
+                    <th class="px-4 py-3 font-medium">风险偏好</th>
+                    <th class="px-4 py-3 font-medium">交易风格</th>
+                    <th class="px-4 py-3 font-medium">关注数</th>
+                    <th class="px-4 py-3 font-medium">注册时间</th>
+                    <th class="px-4 py-3 font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="u in users" :key="u.wechat_id">
+                    <tr class="border-t border-gray-50 hover:bg-gray-50/50">
+                      <td class="px-4 py-3 font-mono text-xs" x-text="u.wechat_id"></td>
+                      <td class="px-4 py-3" x-text="u.nickname||'-'"></td>
+                      <td class="px-4 py-3" x-text="u.risk_level"></td>
+                      <td class="px-4 py-3" x-text="u.trade_style"></td>
+                      <td class="px-4 py-3" x-text="u.watch_count"></td>
+                      <td class="px-4 py-3 text-gray-400" x-text="u.created_at?.slice(0,10)"></td>
+                      <td class="px-4 py-3">
+                        <button @click="viewUser(u.wechat_id)" class="text-blue-600 hover:underline">详情</button>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div x-show="users.length===0" class="text-center py-12 text-gray-400">暂无用户</div>
+            </div>
+          </div>
+          <!-- 详情 -->
+          <div x-show="selectedUser" class="fade-in">
+            <button @click="selectedUser=null" class="text-sm text-blue-600 hover:underline mb-4 inline-block">&larr; 返回列表</button>
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <!-- 基本信息 -->
+              <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                <h3 class="font-medium mb-4">用户信息</h3>
+                <div class="space-y-3 text-sm">
+                  <div><span class="text-gray-500 w-20 inline-block">微信ID</span><span class="font-mono" x-text="selectedUser.profile?.wechat_id"></span></div>
+                  <div><span class="text-gray-500 w-20 inline-block">昵称</span>
+                    <input x-model="editProfile.nickname" class="border border-gray-200 rounded px-2 py-1 w-40">
+                  </div>
+                  <div><span class="text-gray-500 w-20 inline-block">风险偏好</span>
+                    <select x-model="editProfile.risk_level" class="border border-gray-200 rounded px-2 py-1">
+                      <option value="conservative">保守</option>
+                      <option value="moderate">稳健</option>
+                      <option value="aggressive">激进</option>
+                    </select>
+                  </div>
+                  <div><span class="text-gray-500 w-20 inline-block">交易风格</span>
+                    <select x-model="editProfile.trade_style" class="border border-gray-200 rounded px-2 py-1">
+                      <option value="day">日内</option>
+                      <option value="swing">波段</option>
+                      <option value="long">长线</option>
+                    </select>
+                  </div>
+                  <button @click="saveProfile()" class="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 transition">保存</button>
+                  <span x-show="profileSaved" class="text-green-600 text-sm ml-2">已保存</span>
+                </div>
+              </div>
+              <!-- 关注列表 -->
+              <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                <h3 class="font-medium mb-4">关注列表</h3>
+                <div class="space-y-1.5 text-sm max-h-60 overflow-auto">
+                  <template x-for="w in selectedUser.watchlist||[]" :key="w.stock_code">
+                    <div class="flex justify-between items-center py-1">
+                      <span><span class="font-mono text-xs text-gray-500" x-text="w.stock_code"></span> <span x-text="w.stock_name||''"></span></span>
+                      <span class="text-gray-400 text-xs" x-text="w.added_at?.slice(0,10)"></span>
+                    </div>
+                  </template>
+                  <div x-show="!selectedUser.watchlist?.length" class="text-gray-400">暂无关注</div>
+                </div>
+              </div>
+              <!-- 记忆 -->
+              <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                <h3 class="font-medium mb-4">长期记忆</h3>
+                <div class="space-y-2 text-sm max-h-60 overflow-auto">
+                  <template x-for="m in selectedUser.memories||[]" :key="m.created_at">
+                    <div class="bg-gray-50 rounded-lg p-2.5">
+                      <div class="text-xs text-gray-400 mb-1" x-text="m.category + ' · ' + m.created_at?.slice(0,10)"></div>
+                      <div x-text="m.content"></div>
+                    </div>
+                  </template>
+                  <div x-show="!selectedUser.memories?.length" class="text-gray-400">暂无记忆</div>
+                </div>
+              </div>
+            </div>
+            <!-- 对话历史 -->
+            <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mt-6">
+              <h3 class="font-medium mb-4">近期对话</h3>
+              <div class="space-y-2 max-h-96 overflow-auto">
+                <template x-for="(c,i) in selectedUser.recent_chat||[]" :key="i">
+                  <div :class="c.role==='user'?'bg-blue-50 ml-8':'bg-gray-50 mr-8'" class="rounded-lg p-3 text-sm">
+                    <div class="text-xs text-gray-400 mb-1" x-text="(c.role==='user'?'用户':'AI') + ' · ' + c.created_at"></div>
+                    <div class="whitespace-pre-wrap" x-text="c.content"></div>
+                  </div>
+                </template>
+                <div x-show="!selectedUser.recent_chat?.length" class="text-gray-400 text-sm">暂无对话</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 配置管理 -->
+        <div x-show="page==='config'" class="fade-in">
+          <h2 class="text-xl font-bold mb-6">配置管理</h2>
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg">
+            <div class="space-y-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">MiniMax API Key</label>
+                <input type="text" x-model="cfg.minimax_api_key" placeholder="当前值（脱敏）"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">MiniMax Base URL</label>
+                <input type="text" x-model="cfg.minimax_base_url"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">MiniMax Model</label>
+                <input type="text" x-model="cfg.minimax_model"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <hr class="border-gray-100">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">修改管理密码</label>
+                <input type="password" x-model="newPassword" placeholder="留空则不修改"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <button @click="saveConfig()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存配置</button>
+              <span x-show="cfgSaved" class="text-green-600 text-sm ml-2" x-text="cfgSavedMsg"></span>
+            </div>
+          </div>
+        </div>
+
+      </main>
+    </div>
+  </template>
+
+<script>
+function admin() {
+  const saved = localStorage.getItem('admin_token');
+  return {
+    token: saved || '',
+    password: '',
+    loginErr: '',
+    page: 'dashboard',
+
+    // dashboard
+    dash: {},
+    stats: [],
+
+    // users
+    users: [],
+    selectedUser: null,
+    editProfile: {},
+    profileSaved: false,
+
+    // config
+    cfg: {},
+    newPassword: '',
+    cfgSaved: false,
+    cfgSavedMsg: '',
+
+    menu: [
+      { key: 'dashboard', label: '仪表盘', load() { this.loadDashboard?.() } },
+      { key: 'users', label: '用户管理', load() { this.loadUsers?.() } },
+      { key: 'config', label: '配置管理', load() { this.loadConfig?.() } },
+    ],
+
+    async init() {
+      // bind menu load functions
+      this.menu[0].load = () => this.loadDashboard();
+      this.menu[1].load = () => this.loadUsers();
+      this.menu[2].load = () => this.loadConfig();
+      if (this.token) await this.loadDashboard();
+    },
+
+    headers() { return { 'Authorization': 'Bearer ' + this.token, 'Content-Type': 'application/json' } },
+
+    async doLogin() {
+      this.loginErr = '';
+      try {
+        const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({password:this.password}) });
+        if (!r.ok) { this.loginErr = '密码错误'; return; }
+        const d = await r.json();
+        this.token = d.token;
+        localStorage.setItem('admin_token', d.token);
+        await this.loadDashboard();
+      } catch(e) { this.loginErr = '请求失败'; }
+    },
+
+    logout() { this.token=''; localStorage.removeItem('admin_token'); },
+
+    async api(path, opts={}) {
+      const r = await fetch(path, { ...opts, headers: this.headers() });
+      if (r.status===401) { this.logout(); return null; }
+      return r.json();
+    },
+
+    async loadDashboard() {
+      const d = await this.api('/api/dashboard');
+      if (!d) return;
+      this.dash = d;
+      this.stats = [
+        { label: '用户数', value: d.users },
+        { label: '关注股票数', value: d.watchlist_items },
+        { label: '今日分析', value: d.today_reports },
+        { label: '今日对话', value: d.today_chats },
+      ];
+    },
+
+    async loadUsers() {
+      const d = await this.api('/api/users');
+      if (d) this.users = d;
+    },
+
+    async viewUser(id) {
+      const d = await this.api('/api/users/' + id);
+      if (!d) return;
+      this.selectedUser = d;
+      this.editProfile = {
+        nickname: d.profile?.nickname || '',
+        risk_level: d.profile?.risk_level || 'moderate',
+        trade_style: d.profile?.trade_style || 'swing',
+      };
+      this.profileSaved = false;
+    },
+
+    async saveProfile() {
+      const id = this.selectedUser?.profile?.wechat_id;
+      if (!id) return;
+      await this.api('/api/users/' + id, { method:'PUT', body:JSON.stringify(this.editProfile) });
+      this.profileSaved = true;
+      setTimeout(() => this.profileSaved = false, 2000);
+    },
+
+    async loadConfig() {
+      const d = await this.api('/api/config');
+      if (d) { this.cfg = d; this.newPassword = ''; this.cfgSaved = false; }
+    },
+
+    async saveConfig() {
+      const body = {};
+      if (this.cfg.minimax_api_key && !this.cfg.minimax_api_key.includes('****'))
+        body.minimax_api_key = this.cfg.minimax_api_key;
+      if (this.cfg.minimax_base_url) body.minimax_base_url = this.cfg.minimax_base_url;
+      if (this.cfg.minimax_model) body.minimax_model = this.cfg.minimax_model;
+      if (this.newPassword) body.admin_password = this.newPassword;
+
+      const d = await this.api('/api/config', { method:'PUT', body:JSON.stringify(body) });
+      if (d) { this.cfgSaved = true; this.cfgSavedMsg = d.message || '已保存'; }
+      setTimeout(() => this.cfgSaved = false, 3000);
+    },
+  }
+}
+</script>
+
+</body>
+</html>

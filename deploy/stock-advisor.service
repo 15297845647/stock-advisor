@@ -1,0 +1,22 @@
+[Unit]
+Description=Stock Advisor - cc-connect + ACP Agent
+After=network.target
+
+[Service]
+Type=simple
+User=shy
+WorkingDirectory=/opt/stock-advisor
+ExecStart=/usr/local/bin/cc-connect
+Restart=on-failure
+RestartSec=10
+
+# 环境变量
+EnvironmentFile=/opt/stock-advisor/.env
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stock-advisor
+
+[Install]
+WantedBy=multi-user.target
