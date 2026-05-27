@@ -50,18 +50,24 @@ class MiniMaxClient:
 
     @staticmethod
     def _extract_response_text(data: dict) -> str:
-        """兼容多种 API 返回格式提取文本"""
-        # Anthropic 格式: {"content": [{"type": "text", "text": "..."}]}
+        """兼容多种 API 返回格式提取文本（含 thinking 块跳过）"""
         content = data.get("content", [])
+
+        # Anthropic / MiniMax 格式: {"content": [{...}, ...]}
         if isinstance(content, list) and content:
-            block = content[0]
-            if isinstance(block, dict):
-                if "text" in block:
-                    return block["text"]
-                if "value" in block:
-                    return block["value"]
-            if isinstance(block, str):
-                return block
+            # 跳过 thinking 块，取第一个 text 块
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "thinking":
+                        continue
+                    if block.get("type") == "text" and "text" in block:
+                        return block["text"]
+                    if "text" in block:
+                        return block["text"]
+                    if "value" in block:
+                        return block["value"]
+                if isinstance(block, str):
+                    return block
 
         # OpenAI 格式: {"choices": [{"message": {"content": "..."}}]}
         choices = data.get("choices", [])
