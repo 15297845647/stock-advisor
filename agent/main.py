@@ -123,13 +123,16 @@ class StockAdvisorAgent:
 
     def _handle_session_new(self, params: dict) -> dict:
         session_id = str(uuid.uuid4())
+        logger.info("session/new params: %s", json.dumps(params, ensure_ascii=False, default=str)[:1000])
         logger.info("session created: %s", session_id)
         return {"sessionId": session_id}
 
     async def _handle_session_prompt(self, params: dict) -> dict:
         session_id = params.get("sessionId", "")
 
-        # cc-connect 用 "prompt" 字段传递用户消息
+        # 调试：完整打印 cc-connect 传来的参数
+        logger.info("session/prompt full params: %s", json.dumps(params, ensure_ascii=False, default=str)[:2000])
+
         raw_content = ""
         prompt_field = params.get("prompt", "")
         messages = params.get("messages", [])
