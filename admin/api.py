@@ -5,6 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from admin.auth import login, verify_token
@@ -219,6 +220,51 @@ async def update_user_bot(wechat_id: str, req: UpdateBotRequest):
 
     await regenerate_config()
     return {"ok": True}
+
+
+# ────────────────────── Bot 扫码绑定 ──────────────────────
+
+
+@router.post("/users/{wechat_id}/bot/setup", dependencies=[Depends(verify_token)])
+async def start_bot_setup(wechat_id: str):
+    """启动扫码绑定流程，后台运行 cc-connect weixin setup"""
+    from admin.bot_manager import start_setup
+    result = start_setup(wechat_id)
+    if result["status"] == "failed":
+        raise HTTPException(500, result.get("message", "启动失败"))
+    return result
+
+
+@router.get("/users/{wechat_id}/bot/setup/status", dependencies=[Depends(verify_token)])
+async def bot_setup_status(wechat_id: str):
+    """轮询绑定状态。成功时自动写入 DB 并重新生成 config"""
+    from admin.bot_manager import get_setup_status, regenerate_config
+
+    result = get_setup_status(wechat_id)
+
+    if result["status"] == "success":
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                "UPDATE bots SET token = ?, account_id = ?, status = 'active' WHERE user_id = ?",
+                (result["token"], result.get("account_id", ""), wechat_id),
+            )
+            await conn.commit()
+        finally:
+            await conn.close()
+        await regenerate_config()
+
+    return result
+
+
+@router.get("/users/{wechat_id}/bot/qr", dependencies=[Depends(verify_token)])
+async def bot_qr_image(wechat_id: str):
+    """返回绑定二维码 PNG 图片"""
+    from admin.bot_manager import get_qr_path
+    qr = get_qr_path(wechat_id)
+    if not qr:
+        raise HTTPException(404, "二维码尚未生成")
+    return FileResponse(qr, media_type="image/png")
 
 
 @router.delete("/users/{wechat_id}", dependencies=[Depends(verify_token)])

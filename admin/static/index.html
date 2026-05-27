@@ -180,7 +180,7 @@
 
           <!-- 用户详情 -->
           <div x-show="selectedUser" class="fade-in">
-            <button @click="selectedUser=null" class="text-sm text-blue-600 hover:underline mb-4 inline-block">&larr; 返回列表</button>
+            <button @click="_stopSetupPoll(); selectedUser=null" class="text-sm text-blue-600 hover:underline mb-4 inline-block">&larr; 返回列表</button>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <!-- 基本信息 -->
               <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
@@ -221,16 +221,66 @@
                             x-text="selectedUser.bot.status==='active'?'已绑定':'待绑定'"></span>
                     </div>
                     <div><span class="text-gray-500 w-24 inline-block">Bot 名称</span><span class="font-mono text-xs" x-text="selectedUser.bot.name"></span></div>
-                    <div>
-                      <label class="text-gray-500 text-sm block mb-1">Token</label>
-                      <input x-model="editBot.token" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+
+                    <!-- 扫码绑定区域 -->
+                    <div x-show="!showManualBot">
+                      <template x-if="setupStatus==='idle' || setupStatus==='none'">
+                        <div>
+                          <button @click="startSetup()" class="bg-green-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-green-700 transition">
+                            <span x-text="selectedUser.bot.status==='active'?'重新绑定':'开始绑定'"></span>
+                          </button>
+                          <button @click="showManualBot=true" class="text-gray-400 hover:text-gray-600 text-xs ml-3">手动填写 Token</button>
+                        </div>
+                      </template>
+                      <template x-if="setupStatus==='waiting'">
+                        <div class="text-center py-2">
+                          <div class="inline-block animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent mb-2"></div>
+                          <p class="text-gray-500 text-sm">正在生成二维码...</p>
+                        </div>
+                      </template>
+                      <template x-if="setupStatus==='qr_ready'">
+                        <div class="text-center">
+                          <p class="text-blue-600 font-medium mb-2">请用微信扫描二维码</p>
+                          <img :src="'/api/users/'+selectedUser.profile?.wechat_id+'/bot/qr?t='+Date.now()"
+                               class="mx-auto border border-gray-200 rounded-lg" style="max-width:220px;">
+                          <p class="text-gray-400 text-xs mt-2">
+                            剩余 <span x-text="Math.max(0, 300 - (setupElapsed||0))"></span> 秒
+                          </p>
+                        </div>
+                      </template>
+                      <template x-if="setupStatus==='success'">
+                        <div class="bg-green-50 border border-green-200 rounded-lg p-3 text-center">
+                          <p class="text-green-700 font-medium">绑定成功！</p>
+                          <p class="text-green-600 text-xs mt-1">Token 已自动写入，请重启 cc-connect 生效</p>
+                        </div>
+                      </template>
+                      <template x-if="setupStatus==='failed'">
+                        <div class="bg-red-50 border border-red-200 rounded-lg p-3">
+                          <p class="text-red-600 text-sm" x-text="setupMsg||'绑定失败'"></p>
+                          <button @click="setupStatus='idle'" class="text-blue-600 text-xs mt-2 hover:underline">重试</button>
+                        </div>
+                      </template>
                     </div>
-                    <div>
-                      <label class="text-gray-500 text-sm block mb-1">Account ID</label>
-                      <input x-model="editBot.account_id" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+
+                    <!-- 手动编辑 Token（高级模式）-->
+                    <div x-show="showManualBot" class="border-t border-gray-100 pt-3 mt-2">
+                      <div class="flex items-center justify-between mb-2">
+                        <span class="text-gray-500 text-xs">手动填写 Token</span>
+                        <button @click="showManualBot=false" class="text-blue-600 text-xs hover:underline">返回扫码绑定</button>
+                      </div>
+                      <div class="space-y-2">
+                        <div>
+                          <label class="text-gray-500 text-xs block mb-1">Token</label>
+                          <input x-model="editBot.token" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+                        </div>
+                        <div>
+                          <label class="text-gray-500 text-xs block mb-1">Account ID</label>
+                          <input x-model="editBot.account_id" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+                        </div>
+                        <button @click="saveBot()" class="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 transition">保存</button>
+                        <span x-show="botSaved" class="text-green-600 text-sm ml-2">已保存</span>
+                      </div>
                     </div>
-                    <button @click="saveBot()" class="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 transition">保存 Bot 配置</button>
-                    <span x-show="botSaved" class="text-green-600 text-sm ml-2">已保存</span>
                   </div>
                 </template>
                 <template x-if="!selectedUser.bot">
@@ -341,6 +391,11 @@ function admin() {
     createUserErr: false,
     editBot: { token: '', account_id: '' },
     botSaved: false,
+    showManualBot: false,
+    setupStatus: 'idle',
+    setupElapsed: 0,
+    setupMsg: '',
+    _setupPollTimer: null,
     restartMsg: '',
 
     // config
@@ -437,6 +492,10 @@ function admin() {
       };
       this.profileSaved = false;
       this.botSaved = false;
+      this.showManualBot = false;
+      this.setupStatus = 'idle';
+      this.setupMsg = '';
+      this._stopSetupPoll();
     },
 
     async saveProfile() {
@@ -455,6 +514,48 @@ function admin() {
       const d = await this.api('/api/users/' + id);
       if (d) { this.selectedUser = d; this.editBot = { token: d.bot?.token || '', account_id: d.bot?.account_id || '' }; }
       setTimeout(() => this.botSaved = false, 2000);
+    },
+
+    async startSetup() {
+      const id = this.selectedUser?.profile?.wechat_id;
+      if (!id) return;
+      this.setupStatus = 'waiting'; this.setupMsg = ''; this.setupElapsed = 0;
+      try {
+        const r = await fetch('/api/users/' + id + '/bot/setup', { method:'POST', headers:this.headers() });
+        if (!r.ok) {
+          const d = await r.json();
+          this.setupStatus = 'failed'; this.setupMsg = d.detail || '启动失败'; return;
+        }
+        this._pollSetupStatus(id);
+      } catch(e) { this.setupStatus = 'failed'; this.setupMsg = '请求失败'; }
+    },
+
+    _pollSetupStatus(userId) {
+      if (this._setupPollTimer) clearInterval(this._setupPollTimer);
+      this._setupPollTimer = setInterval(async () => {
+        const d = await this.api('/api/users/' + userId + '/bot/setup/status');
+        if (!d) { this._stopSetupPoll(); return; }
+        this.setupElapsed = d.elapsed || 0;
+
+        if (d.status === 'qr_ready') {
+          this.setupStatus = 'qr_ready';
+        } else if (d.status === 'success') {
+          this.setupStatus = 'success';
+          this._stopSetupPoll();
+          const ud = await this.api('/api/users/' + userId);
+          if (ud) { this.selectedUser = ud; this.editBot = { token: ud.bot?.token || '', account_id: ud.bot?.account_id || '' }; }
+        } else if (d.status === 'failed') {
+          this.setupStatus = 'failed'; this.setupMsg = d.message || '绑定失败';
+          this._stopSetupPoll();
+        } else if (d.status === 'none') {
+          this.setupStatus = 'idle';
+          this._stopSetupPoll();
+        }
+      }, 2000);
+    },
+
+    _stopSetupPoll() {
+      if (this._setupPollTimer) { clearInterval(this._setupPollTimer); this._setupPollTimer = null; }
     },
 
     async restartCC() {
