@@ -209,7 +209,7 @@ class StockAdvisorAgent:
             "params": {
                 "sessionId": session_id,
                 "update": {
-                    "kind": "agent_message_chunk",
+                    "sessionUpdate": "agent_message_chunk",
                     "content": {"type": "text", "text": text},
                 },
             },
