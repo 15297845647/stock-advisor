@@ -176,8 +176,7 @@ class AKShareClient:
         except Exception:
             logger.warning("新浪涨幅榜也不可用，用蓝筹兜底")
 
-        # 最终兜底：用预设蓝筹股拉日K
-        return await self._bluechip_fallback()
+        return []
 
     @staticmethod
     def _parse_rank_em(df, count: int) -> list[dict]:
@@ -193,32 +192,6 @@ class AKShareClient:
                 "amount": float(r.get("成交额", 0)),
                 "turnover": float(r.get("换手率", 0)),
             })
-        return result
-
-    _BLUECHIP_CODES = [
-        "600519", "000858", "601318", "600036", "000001",
-        "600900", "601012", "000333", "002594", "601888",
-        "600276", "000568", "002415", "600309", "601166",
-    ]
-
-    async def _bluechip_fallback(self) -> list[dict]:
-        """用预设蓝筹股的最新日K构造榜单"""
-        result = []
-        for code in self._BLUECHIP_CODES[:10]:
-            bars = await self.get_stock_history(code, days=2)
-            if not bars:
-                continue
-            latest = bars[-1]
-            result.append({
-                "code": code,
-                "name": code,
-                "price": latest.close,
-                "change_pct": latest.change_pct,
-                "volume": latest.volume,
-                "amount": latest.amount,
-                "turnover": 0,
-            })
-        result.sort(key=lambda x: x["change_pct"], reverse=True)
         return result
 
     async def get_sector_fund_flow(self, count: int = 10) -> list[dict]:
