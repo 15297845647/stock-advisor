@@ -128,21 +128,20 @@ class StockAdvisorAgent:
 
     async def _handle_session_prompt(self, params: dict) -> dict:
         session_id = params.get("sessionId", "")
+
+        # cc-connect 用 "prompt" 字段传递用户消息（字符串）
+        raw_content = ""
+        prompt_field = params.get("prompt", "")
         messages = params.get("messages", [])
 
-        logger.info("prompt params keys: %s", list(params.keys()))
-        logger.info("messages count: %d", len(messages))
-        for i, m in enumerate(messages):
-            logger.info("  msg[%d] role=%s content_type=%s content_preview=%s",
-                        i, m.get("role"), type(m.get("content")).__name__,
-                        str(m.get("content", ""))[:100])
+        if isinstance(prompt_field, str) and prompt_field.strip():
+            raw_content = prompt_field.strip()
+        elif messages:
+            last_msg = messages[-1]
+            raw_content = _extract_text(last_msg.get("content", ""))
 
-        if not messages:
+        if not raw_content:
             return self._make_result(session_id, "没有收到消息内容。")
-
-        # 提取最后一条用户消息文本
-        last_msg = messages[-1]
-        raw_content = _extract_text(last_msg.get("content", ""))
 
         # 提取用户身份
         user_id = self._get_user_id(params, messages)
