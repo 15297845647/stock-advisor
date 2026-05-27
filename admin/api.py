@@ -153,6 +153,8 @@ async def update_user(wechat_id: str, req: UpdateProfileRequest):
 
 class AddBotRequest(BaseModel):
     user_id: str
+    token: str = ""
+    account_id: str = ""
 
 
 class UpdateBotTokenRequest(BaseModel):
@@ -168,15 +170,18 @@ async def api_list_bots():
 
 @router.post("/bots", dependencies=[Depends(verify_token)])
 async def api_add_bot(req: AddBotRequest):
-    from admin.bot_manager import add_bot, get_setup_command
+    from admin.bot_manager import add_bot
     if not req.user_id.strip():
         raise HTTPException(400, "用户ID不能为空")
     try:
-        bot = await add_bot(req.user_id.strip())
+        bot = await add_bot(
+            req.user_id.strip(),
+            token=req.token.strip(),
+            account_id=req.account_id.strip(),
+        )
     except Exception as e:
         raise HTTPException(400, f"添加失败: {e}")
-    cmd = get_setup_command(bot["name"])
-    return {**bot, "setup_command": cmd}
+    return bot
 
 
 @router.delete("/bots/{name}", dependencies=[Depends(verify_token)])

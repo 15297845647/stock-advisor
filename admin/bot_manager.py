@@ -30,21 +30,22 @@ async def list_bots() -> list[dict]:
         await conn.close()
 
 
-async def add_bot(user_id: str) -> dict:
+async def add_bot(user_id: str, token: str = "", account_id: str = "") -> dict:
     """添加新 bot，写入DB，重新生成 config.toml"""
     name = f"bot-{user_id}"
+    status = "active" if token else "pending"
     conn = await get_connection()
     try:
         await conn.execute(
-            "INSERT INTO bots (name, user_id, status) VALUES (?, ?, 'pending')",
-            (name, user_id),
+            "INSERT INTO bots (name, user_id, token, account_id, status) VALUES (?, ?, ?, ?, ?)",
+            (name, user_id, token, account_id, status),
         )
         await conn.commit()
     finally:
         await conn.close()
 
     await regenerate_config()
-    return {"name": name, "user_id": user_id, "status": "pending"}
+    return {"name": name, "user_id": user_id, "status": status}
 
 
 async def delete_bot(name: str):

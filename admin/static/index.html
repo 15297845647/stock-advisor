@@ -185,21 +185,28 @@
           <h2 class="text-xl font-bold mb-6">Bot 管理</h2>
 
           <!-- 添加 Bot -->
-          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6 max-w-lg">
-            <h3 class="font-medium mb-3">添加新用户 Bot</h3>
-            <div class="flex gap-3">
-              <input type="text" x-model="newBotUserId" placeholder="用户ID（英文，如 zhangsan）"
-                     class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
-              <button @click="addBot()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition whitespace-nowrap">添加</button>
+          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6 max-w-xl">
+            <h3 class="font-medium mb-4">添加新用户 Bot</h3>
+            <p class="text-xs text-gray-400 mb-4">先在服务器执行 <code class="bg-gray-100 px-1 rounded">cc-connect weixin setup --project bot-用户名</code> 获取 token，再在此填写。</p>
+            <div class="space-y-3">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">用户ID <span class="text-red-400">*</span></label>
+                <input type="text" x-model="newBot.user_id" placeholder="英文标识，如 zhangsan"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Token <span class="text-red-400">*</span></label>
+                <input type="text" x-model="newBot.token" placeholder="扫码绑定后获得的 ilink token"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Account ID <span class="text-red-400">*</span></label>
+                <input type="text" x-model="newBot.account_id" placeholder="扫码绑定后获得的 account_id"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <button @click="addBot()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">添加并生成配置</button>
+              <p x-show="addBotMsg" class="text-sm" :class="addBotErr?'text-red-500':'text-green-600'" x-text="addBotMsg"></p>
             </div>
-            <p x-show="addBotMsg" class="text-sm mt-2" :class="addBotErr?'text-red-500':'text-green-600'" x-text="addBotMsg"></p>
-          </div>
-
-          <!-- 绑定命令提示 -->
-          <div x-show="setupCmd" class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 max-w-lg">
-            <p class="text-sm text-amber-800 font-medium mb-2">在服务器上执行以下命令让用户扫码绑定：</p>
-            <code class="block bg-white rounded-lg p-3 text-sm font-mono text-gray-800 select-all" x-text="setupCmd"></code>
-            <p class="text-xs text-amber-600 mt-2">扫码成功后，在 Bot 列表中填入 token 和 account_id，然后重启 cc-connect。</p>
           </div>
 
           <!-- Bot 列表 -->
@@ -324,10 +331,9 @@ function admin() {
 
     // bots
     bots: [],
-    newBotUserId: '',
+    newBot: { user_id: '', token: '', account_id: '' },
     addBotMsg: '',
     addBotErr: false,
-    setupCmd: '',
     editingBot: null,
     editBotForm: { token: '', account_id: '' },
     restartMsg: '',
@@ -418,15 +424,19 @@ function admin() {
     },
 
     async addBot() {
-      this.addBotMsg = ''; this.addBotErr = false; this.setupCmd = '';
-      if (!this.newBotUserId.trim()) { this.addBotMsg = '请输入用户ID'; this.addBotErr = true; return; }
+      this.addBotMsg = ''; this.addBotErr = false;
+      const { user_id, token, account_id } = this.newBot;
+      if (!user_id.trim()) { this.addBotMsg = '请输入用户ID'; this.addBotErr = true; return; }
+      if (!token.trim()) { this.addBotMsg = '请输入 Token'; this.addBotErr = true; return; }
+      if (!account_id.trim()) { this.addBotMsg = '请输入 Account ID'; this.addBotErr = true; return; }
       try {
-        const r = await fetch('/api/bots', { method:'POST', headers:this.headers(), body:JSON.stringify({user_id:this.newBotUserId.trim()}) });
+        const r = await fetch('/api/bots', { method:'POST', headers:this.headers(), body:JSON.stringify({
+          user_id: user_id.trim(), token: token.trim(), account_id: account_id.trim()
+        })});
         const d = await r.json();
         if (!r.ok) { this.addBotMsg = d.detail || '添加失败'; this.addBotErr = true; return; }
-        this.addBotMsg = `Bot ${d.name} 已添加`;
-        this.setupCmd = d.setup_command;
-        this.newBotUserId = '';
+        this.addBotMsg = `Bot ${d.name} 已添加，点击"重启 cc-connect"生效`;
+        this.newBot = { user_id: '', token: '', account_id: '' };
         await this.loadBots();
       } catch(e) { this.addBotMsg = '请求失败'; this.addBotErr = true; }
     },
