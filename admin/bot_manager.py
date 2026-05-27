@@ -76,7 +76,18 @@ async def regenerate_config():
 
 
 def restart_cc_connect() -> str:
-    """杀掉 cc-connect 并重启"""
+    """重启 cc-connect。优先 daemon restart（秒级），回退到 pkill + 重启"""
+    # 尝试 daemon restart（systemd/launchd 管理，最快恢复）
+    ret = subprocess.run(
+        ["cc-connect", "daemon", "restart"],
+        capture_output=True, timeout=10,
+    )
+    if ret.returncode == 0:
+        logger.info("cc-connect daemon restarted")
+        return "cc-connect 已通过 daemon 重启"
+
+    # 回退：手动 kill + 重启
+    logger.info("daemon restart failed (code=%d), falling back to pkill", ret.returncode)
     try:
         subprocess.run(["pkill", "cc-connect"], capture_output=True)
     except Exception:

@@ -243,6 +243,8 @@ async def bot_setup_status(wechat_id: str):
     result = get_setup_status(wechat_id)
 
     if result["status"] == "success":
+        from admin.bot_manager import restart_cc_connect
+
         conn = await get_connection()
         try:
             await conn.execute(
@@ -253,6 +255,8 @@ async def bot_setup_status(wechat_id: str):
         finally:
             await conn.close()
         await regenerate_config()
+        restart_msg = restart_cc_connect()
+        result["restart"] = restart_msg
 
     return result
 
