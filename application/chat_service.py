@@ -3,6 +3,7 @@
 import logging
 
 from application.analysis_service import AnalysisService
+from application.position_service import PositionService
 from application.subscription_service import SubscriptionService
 from domain.intent_parser import Intent, parse_intent
 from domain.models.user_context import UserContext
@@ -18,6 +19,7 @@ class ChatService:
     def __init__(self):
         self.analysis = AnalysisService()
         self.subscription = SubscriptionService()
+        self.position = PositionService()
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
         self.akshare = AKShareClient()
@@ -61,6 +63,17 @@ class ChatService:
 
             case Intent.RECOMMEND:
                 return await self._handle_recommend(ctx)
+
+            case Intent.ADD_POSITION:
+                return await self.position.add_position(
+                    wechat_id, parsed.stock_code, parsed.shares, parsed.price)
+
+            case Intent.CLOSE_POSITION:
+                return await self.position.close_position(
+                    wechat_id, parsed.stock_code, parsed.price)
+
+            case Intent.SHOW_POSITIONS:
+                return await self.position.show_positions(wechat_id)
 
             case Intent.FREE_CHAT:
                 return await self._handle_free_chat(ctx, message)

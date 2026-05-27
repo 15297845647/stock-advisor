@@ -301,6 +301,28 @@
                   <div x-show="!selectedUser.watchlist?.length" class="text-gray-400">暂无关注</div>
                 </div>
               </div>
+              <!-- 持仓 -->
+              <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+                <h3 class="font-medium mb-4">当前持仓</h3>
+                <div class="space-y-1.5 text-sm max-h-60 overflow-auto">
+                  <template x-for="p in selectedUser.positions||[]" :key="p.id">
+                    <div class="flex justify-between items-center py-1 border-b border-gray-50">
+                      <div>
+                        <span class="font-mono text-xs text-gray-500" x-text="p.stock_code"></span>
+                        <span x-text="p.stock_name||''"></span>
+                        <span class="text-gray-400 text-xs ml-1" x-text="p.shares+'股'"></span>
+                      </div>
+                      <div class="text-right text-xs">
+                        <span class="text-gray-500">成本</span>
+                        <span class="font-mono" x-text="Number(p.cost_price).toFixed(2)"></span>
+                        <span class="text-gray-400 ml-1" x-text="p.open_date?.slice(0,10)"></span>
+                      </div>
+                    </div>
+                  </template>
+                  <div x-show="!selectedUser.positions?.length" class="text-gray-400">暂无持仓 — 用户可通过微信发送「买入 600519 100股 成本180」录入</div>
+                </div>
+              </div>
+
               <!-- 记忆 -->
               <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
                 <h3 class="font-medium mb-4">长期记忆</h3>
@@ -447,7 +469,7 @@ function admin() {
       this.stats = [
         { label: '用户数', value: d.users },
         { label: '关注股票数', value: d.watchlist_items },
-        { label: '今日分析', value: d.today_reports },
+        { label: '持仓笔数', value: d.open_positions || 0 },
         { label: '今日对话', value: d.today_chats },
       ];
     },

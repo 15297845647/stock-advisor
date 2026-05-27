@@ -56,6 +56,23 @@ CREATE TABLE IF NOT EXISTS stock_daily_cache (
     PRIMARY KEY (stock_code, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS user_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wechat_id TEXT REFERENCES users(wechat_id),
+    stock_code TEXT NOT NULL,
+    stock_name TEXT DEFAULT '',
+    direction TEXT DEFAULT 'long',
+    shares INTEGER NOT NULL,
+    cost_price REAL NOT NULL,
+    open_date DATE NOT NULL,
+    close_date DATE,
+    close_price REAL,
+    status TEXT DEFAULT 'open',
+    note TEXT DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS bots (
     name TEXT PRIMARY KEY,
     user_id TEXT NOT NULL UNIQUE,
