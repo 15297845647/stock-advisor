@@ -129,26 +129,30 @@ class StockAdvisorAgent:
     async def _handle_session_prompt(self, params: dict) -> dict:
         session_id = params.get("sessionId", "")
 
-        # cc-connect 用 "prompt" 字段传递用户消息（字符串）
+        # cc-connect 用 "prompt" 字段传递用户消息
         raw_content = ""
         prompt_field = params.get("prompt", "")
         messages = params.get("messages", [])
 
         if isinstance(prompt_field, str) and prompt_field.strip():
             raw_content = prompt_field.strip()
+        elif isinstance(prompt_field, list):
+            raw_content = _extract_text(prompt_field)
         elif messages:
             last_msg = messages[-1]
             raw_content = _extract_text(last_msg.get("content", ""))
 
         if not raw_content:
-            return self._make_result(session_id, "没有收到消息内容。")
+            self._send_update(session_id, "没有收到消息内容。")
+            return {"stopReason": "end_turn"}
 
         # 提取用户身份
         user_id = self._get_user_id(params, messages)
         user_message = self.user_router.strip_user_prefix(raw_content)
 
         if not user_message.strip():
-            return self._make_result(session_id, "请输入你想查询的内容。")
+            self._send_update(session_id, "请输入你想查询的内容。")
+            return {"stopReason": "end_turn"}
 
         logger.info("User=%s Message=%s", user_id, user_message[:80])
 
@@ -161,7 +165,8 @@ class StockAdvisorAgent:
             response = f"处理出错：{e}"
 
         logger.info("Response length: %d chars", len(response))
-        return self._make_result(session_id, response)
+        self._send_update(session_id, response)
+        return {"stopReason": "end_turn"}
 
     def _handle_session_stop(self, params: dict) -> dict:
         return {"stopped": True}
@@ -196,17 +201,21 @@ class StockAdvisorAgent:
 
     # ── helpers ──
 
-    @staticmethod
-    def _make_result(session_id: str, text: str) -> dict:
-        """构造 ACP session/prompt 响应"""
-        return {
-            "sessionId": session_id,
-            "messages": [{
-                "role": "assistant",
-                "content": text,
-            }],
-            "state": "completed",
+    def _send_update(self, session_id: str, text: str):
+        """发送 session/update 通知（ACP 协议：文本内容通过通知下发）"""
+        notification = {
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": session_id,
+                "kind": "message",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": text}],
+                },
+            },
         }
+        self._send(notification)
 
     @staticmethod
     def _rpc_result(req_id, result: dict) -> dict:
