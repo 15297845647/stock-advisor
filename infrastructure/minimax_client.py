@@ -36,6 +36,7 @@ class MiniMaxClient:
             "max_tokens": max_tokens,
             "system": system_prompt,
             "messages": messages,
+            "tool_choice": {"type": "none"},
         }
         try:
             resp = await self.client.post(
@@ -50,15 +51,18 @@ class MiniMaxClient:
 
     @staticmethod
     def _extract_response_text(data: dict) -> str:
-        """兼容多种 API 返回格式提取文本（含 thinking 块跳过）"""
+        """兼容多种 API 返回格式提取文本（含 thinking / tool_use 块跳过）"""
         content = data.get("content", [])
+        thinking_text = ""
 
         # Anthropic / MiniMax 格式: {"content": [{...}, ...]}
         if isinstance(content, list) and content:
-            # 跳过 thinking 块，取第一个 text 块
             for block in content:
                 if isinstance(block, dict):
                     if block.get("type") == "thinking":
+                        thinking_text = block.get("thinking", "")
+                        continue
+                    if block.get("type") == "tool_use":
                         continue
                     if block.get("type") == "text" and "text" in block:
                         return block["text"]
@@ -79,6 +83,11 @@ class MiniMaxClient:
         # content 本身是字符串
         if isinstance(content, str):
             return content
+
+        # 最终降级：模型只产生了 thinking 没产生 text，用 thinking 内容
+        if thinking_text:
+            logger.warning("MiniMax 仅返回 thinking 块，用作回复")
+            return thinking_text
 
         logger.error("MiniMax API unknown response shape: %s", str(data)[:500])
         raise ValueError("无法解析 MiniMax 返回格式")
