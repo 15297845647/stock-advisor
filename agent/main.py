@@ -175,30 +175,17 @@ class StockAdvisorAgent:
         return {"stopped": True}
 
     def _get_user_id(self, params: dict, messages: list[dict]) -> str:
-        """从 params metadata 或消息内容提取用户 ID"""
-        # cc-connect 可能在 params 级别附带 session metadata
+        """获取用户 ID：优先从 BOT_USER_ID 环境变量（多 ClawBot 模式）"""
+        import os
+        bot_user = os.environ.get("BOT_USER_ID", "").strip()
+        if bot_user:
+            return bot_user
+
         meta = params.get("metadata", {})
         if isinstance(meta, dict):
             for key in ("sender", "from", "user_id", "userId"):
                 if meta.get(key):
                     return str(meta[key])
-
-        # 从消息中提取
-        for msg in reversed(messages):
-            if msg.get("role") != "user":
-                continue
-            text = _extract_text(msg.get("content", ""))
-            if text.startswith("[") and "]" in text:
-                bracket_end = text.index("]")
-                uid = text[1:bracket_end].strip()
-                if uid:
-                    return uid
-            # 消息级 metadata
-            msg_meta = msg.get("metadata", {})
-            if isinstance(msg_meta, dict):
-                for key in ("sender", "from", "user_id", "userId"):
-                    if msg_meta.get(key):
-                        return str(msg_meta[key])
 
         return "default_user"
 
