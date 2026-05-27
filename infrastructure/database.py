@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS stock_daily_cache (
     volume REAL, amount REAL, change_pct REAL,
     PRIMARY KEY (stock_code, trade_date)
 );
+
+CREATE TABLE IF NOT EXISTS bots (
+    name TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL UNIQUE,
+    token TEXT DEFAULT '',
+    account_id TEXT DEFAULT '',
+    status TEXT DEFAULT 'pending',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

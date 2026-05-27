@@ -180,6 +180,93 @@
           </div>
         </div>
 
+        <!-- Bot 管理 -->
+        <div x-show="page==='bots'" class="fade-in">
+          <h2 class="text-xl font-bold mb-6">Bot 管理</h2>
+
+          <!-- 添加 Bot -->
+          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6 max-w-lg">
+            <h3 class="font-medium mb-3">添加新用户 Bot</h3>
+            <div class="flex gap-3">
+              <input type="text" x-model="newBotUserId" placeholder="用户ID（英文，如 zhangsan）"
+                     class="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              <button @click="addBot()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition whitespace-nowrap">添加</button>
+            </div>
+            <p x-show="addBotMsg" class="text-sm mt-2" :class="addBotErr?'text-red-500':'text-green-600'" x-text="addBotMsg"></p>
+          </div>
+
+          <!-- 绑定命令提示 -->
+          <div x-show="setupCmd" class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 max-w-lg">
+            <p class="text-sm text-amber-800 font-medium mb-2">在服务器上执行以下命令让用户扫码绑定：</p>
+            <code class="block bg-white rounded-lg p-3 text-sm font-mono text-gray-800 select-all" x-text="setupCmd"></code>
+            <p class="text-xs text-amber-600 mt-2">扫码成功后，在 Bot 列表中填入 token 和 account_id，然后重启 cc-connect。</p>
+          </div>
+
+          <!-- Bot 列表 -->
+          <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden mb-6">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 text-gray-500 text-left">
+                <tr>
+                  <th class="px-4 py-3 font-medium">Bot 名称</th>
+                  <th class="px-4 py-3 font-medium">用户ID</th>
+                  <th class="px-4 py-3 font-medium">状态</th>
+                  <th class="px-4 py-3 font-medium">Token</th>
+                  <th class="px-4 py-3 font-medium">创建时间</th>
+                  <th class="px-4 py-3 font-medium">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="b in bots" :key="b.name">
+                  <tr class="border-t border-gray-50 hover:bg-gray-50/50">
+                    <td class="px-4 py-3 font-mono text-xs" x-text="b.name"></td>
+                    <td class="px-4 py-3" x-text="b.user_id"></td>
+                    <td class="px-4 py-3">
+                      <span :class="b.status==='active'?'bg-green-100 text-green-700':'bg-yellow-100 text-yellow-700'"
+                            class="px-2 py-0.5 rounded-full text-xs font-medium" x-text="b.status==='active'?'已绑定':'待绑定'"></span>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs text-gray-400" x-text="b.token ? b.token.slice(0,12)+'...' : '未设置'"></td>
+                    <td class="px-4 py-3 text-gray-400 text-xs" x-text="b.created_at?.slice(0,10)"></td>
+                    <td class="px-4 py-3 space-x-2">
+                      <button @click="editBotToken(b)" class="text-blue-600 hover:underline text-xs">设置Token</button>
+                      <button @click="deleteBot(b.name)" class="text-red-500 hover:underline text-xs">删除</button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <div x-show="bots.length===0" class="text-center py-12 text-gray-400">暂无 Bot</div>
+          </div>
+
+          <!-- 设置 Token 弹窗 -->
+          <div x-show="editingBot" class="fixed inset-0 bg-black/30 flex items-center justify-center z-50" @click.self="editingBot=null">
+            <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-md fade-in">
+              <h3 class="font-bold mb-4">设置 Token — <span x-text="editingBot?.name"></span></h3>
+              <div class="space-y-3">
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Token</label>
+                  <input type="text" x-model="editBotForm.token" placeholder="扫码后获得的 token"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">Account ID</label>
+                  <input type="text" x-model="editBotForm.account_id" placeholder="扫码后获得的 account_id"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono">
+                </div>
+              </div>
+              <div class="flex gap-3 mt-5">
+                <button @click="saveBotToken()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存</button>
+                <button @click="editingBot=null" class="text-gray-500 hover:text-gray-700 text-sm">取消</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 重启按钮 -->
+          <button @click="restartCC()" class="bg-gray-800 text-white px-5 py-2 rounded-lg text-sm hover:bg-gray-900 transition">
+            重启 cc-connect
+          </button>
+          <span x-show="restartMsg" class="text-green-600 text-sm ml-3" x-text="restartMsg"></span>
+        </div>
+
         <!-- 配置管理 -->
         <div x-show="page==='config'" class="fade-in">
           <h2 class="text-xl font-bold mb-6">配置管理</h2>
@@ -235,6 +322,16 @@ function admin() {
     editProfile: {},
     profileSaved: false,
 
+    // bots
+    bots: [],
+    newBotUserId: '',
+    addBotMsg: '',
+    addBotErr: false,
+    setupCmd: '',
+    editingBot: null,
+    editBotForm: { token: '', account_id: '' },
+    restartMsg: '',
+
     // config
     cfg: {},
     newPassword: '',
@@ -243,15 +340,16 @@ function admin() {
 
     menu: [
       { key: 'dashboard', label: '仪表盘', load() { this.loadDashboard?.() } },
+      { key: 'bots', label: 'Bot 管理', load() { this.loadBots?.() } },
       { key: 'users', label: '用户管理', load() { this.loadUsers?.() } },
       { key: 'config', label: '配置管理', load() { this.loadConfig?.() } },
     ],
 
     async init() {
-      // bind menu load functions
       this.menu[0].load = () => this.loadDashboard();
-      this.menu[1].load = () => this.loadUsers();
-      this.menu[2].load = () => this.loadConfig();
+      this.menu[1].load = () => this.loadBots();
+      this.menu[2].load = () => this.loadUsers();
+      this.menu[3].load = () => this.loadConfig();
       if (this.token) await this.loadDashboard();
     },
 
@@ -312,6 +410,52 @@ function admin() {
       await this.api('/api/users/' + id, { method:'PUT', body:JSON.stringify(this.editProfile) });
       this.profileSaved = true;
       setTimeout(() => this.profileSaved = false, 2000);
+    },
+
+    async loadBots() {
+      const d = await this.api('/api/bots');
+      if (d) this.bots = d;
+    },
+
+    async addBot() {
+      this.addBotMsg = ''; this.addBotErr = false; this.setupCmd = '';
+      if (!this.newBotUserId.trim()) { this.addBotMsg = '请输入用户ID'; this.addBotErr = true; return; }
+      try {
+        const r = await fetch('/api/bots', { method:'POST', headers:this.headers(), body:JSON.stringify({user_id:this.newBotUserId.trim()}) });
+        const d = await r.json();
+        if (!r.ok) { this.addBotMsg = d.detail || '添加失败'; this.addBotErr = true; return; }
+        this.addBotMsg = `Bot ${d.name} 已添加`;
+        this.setupCmd = d.setup_command;
+        this.newBotUserId = '';
+        await this.loadBots();
+      } catch(e) { this.addBotMsg = '请求失败'; this.addBotErr = true; }
+    },
+
+    async deleteBot(name) {
+      if (!confirm(`确定删除 ${name}？`)) return;
+      await this.api('/api/bots/' + name, { method:'DELETE' });
+      await this.loadBots();
+    },
+
+    editBotToken(bot) {
+      this.editingBot = bot;
+      this.editBotForm = { token: bot.token || '', account_id: bot.account_id || '' };
+    },
+
+    async saveBotToken() {
+      if (!this.editingBot) return;
+      await this.api('/api/bots/' + this.editingBot.name + '/token', {
+        method:'PUT', body:JSON.stringify(this.editBotForm)
+      });
+      this.editingBot = null;
+      await this.loadBots();
+    },
+
+    async restartCC() {
+      this.restartMsg = '重启中...';
+      const d = await this.api('/api/bots/restart', { method:'POST' });
+      this.restartMsg = d?.message || '已发送重启命令';
+      setTimeout(() => this.restartMsg = '', 5000);
     },
 
     async loadConfig() {

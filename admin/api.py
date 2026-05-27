@@ -148,6 +148,58 @@ async def update_user(wechat_id: str, req: UpdateProfileRequest):
     return {"ok": True}
 
 
+# ────────────────────── Bot 管理 ──────────────────────
+
+
+class AddBotRequest(BaseModel):
+    user_id: str
+
+
+class UpdateBotTokenRequest(BaseModel):
+    token: str
+    account_id: str
+
+
+@router.get("/bots", dependencies=[Depends(verify_token)])
+async def api_list_bots():
+    from admin.bot_manager import list_bots
+    return await list_bots()
+
+
+@router.post("/bots", dependencies=[Depends(verify_token)])
+async def api_add_bot(req: AddBotRequest):
+    from admin.bot_manager import add_bot, get_setup_command
+    if not req.user_id.strip():
+        raise HTTPException(400, "用户ID不能为空")
+    try:
+        bot = await add_bot(req.user_id.strip())
+    except Exception as e:
+        raise HTTPException(400, f"添加失败: {e}")
+    cmd = get_setup_command(bot["name"])
+    return {**bot, "setup_command": cmd}
+
+
+@router.delete("/bots/{name}", dependencies=[Depends(verify_token)])
+async def api_delete_bot(name: str):
+    from admin.bot_manager import delete_bot
+    await delete_bot(name)
+    return {"ok": True}
+
+
+@router.put("/bots/{name}/token", dependencies=[Depends(verify_token)])
+async def api_update_bot_token(name: str, req: UpdateBotTokenRequest):
+    from admin.bot_manager import update_bot_token
+    await update_bot_token(name, req.token, req.account_id)
+    return {"ok": True}
+
+
+@router.post("/bots/restart", dependencies=[Depends(verify_token)])
+async def api_restart_cc():
+    from admin.bot_manager import restart_cc_connect
+    msg = restart_cc_connect()
+    return {"message": msg}
+
+
 # ────────────────────── 配置管理 ──────────────────────
 
 
