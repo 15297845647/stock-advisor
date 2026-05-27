@@ -1,7 +1,10 @@
 import asyncio
+import json
 import logging
+import os
 from datetime import date, datetime, timedelta
 from functools import partial
+from pathlib import Path
 
 import akshare as ak
 
@@ -12,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 _rate_lock = asyncio.Lock()
 _last_call_time: float = 0.0
+
+_CACHE_DIR = Path(os.environ.get("DB_PATH", "data/stock_advisor.db")).parent / "cache"
 
 
 async def _throttle():
@@ -31,10 +36,34 @@ async def _run_sync(func, *args, **kwargs):
 
 
 def _tx_symbol(code: str) -> str:
-    """股票代码 → 腾讯格式：sz000001 / sh600000"""
     if code.startswith(("6", "9")):
         return f"sh{code}"
     return f"sz{code}"
+
+
+def _save_cache(name: str, data: list[dict]):
+    """缓存数据到 JSON 文件，标记日期"""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"date": date.today().isoformat(), "data": data}
+    (_CACHE_DIR / f"{name}.json").write_text(
+        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def _load_cache(name: str, max_age_days: int = 1) -> list[dict]:
+    """读取缓存，超过 max_age_days 天视为过期"""
+    path = _CACHE_DIR / f"{name}.json"
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        cached_date = date.fromisoformat(payload["date"])
+        if (date.today() - cached_date).days <= max_age_days:
+            logger.info("使用缓存数据: %s (%s)", name, cached_date)
+            return payload["data"]
+    except Exception:
+        pass
+    return []
 
 
 class AKShareClient:
@@ -95,7 +124,7 @@ class AKShareClient:
             )
         return bars
 
-    # ── 个股实时行情（新浪源）──
+    # ── 个股实时行情（新浪源 + 腾讯降级）──
 
     async def get_realtime_quote(self, code: str) -> StockQuote | None:
         try:
@@ -118,7 +147,7 @@ class AKShareClient:
             )
         except Exception:
             logger.warning("新浪实时行情不可用，降级到腾讯日K: %s", code)
-            return await self._quote_from_daily(code)
+        return await self._quote_from_daily(code)
 
     # ── 个股资金流向 ──
 
@@ -188,12 +217,11 @@ class AKShareClient:
             logger.error("获取指数 %s 失败: %s", index_code, e)
             return None
 
-    # ── 涨幅榜（新浪源）──
+    # ── 涨幅榜（新浪源 + 文件缓存）──
 
     async def get_stock_rank_list(self, count: int = 20) -> list[dict]:
         try:
             df = await _run_sync(ak.stock_zh_a_spot)
-            # 新浪源列名：代码, 名称, 最新价, 涨跌幅, 成交量, 成交额, 最高, 最低, 今开, 昨收
             df["涨跌幅"] = df["涨跌幅"].astype(float)
             df = df.sort_values("涨跌幅", ascending=False).head(count)
             result = []
@@ -207,10 +235,17 @@ class AKShareClient:
                     "amount": float(r.get("成交额", 0)),
                     "turnover": 0,
                 })
+            _save_cache("stock_rank", result)
             return result
         except Exception as e:
-            logger.error("获取涨幅榜失败: %s", e)
-            return []
+            logger.warning("新浪涨幅榜不可用(%s)，尝试读取缓存", e)
+
+        cached = _load_cache("stock_rank", max_age_days=1)
+        if cached:
+            return cached[:count]
+
+        logger.error("涨幅榜无数据：接口和缓存均不可用")
+        return []
 
     # ── 板块资金流向 ──
 
