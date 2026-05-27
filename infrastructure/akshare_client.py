@@ -148,25 +148,78 @@ class AKShareClient:
         return await self._index_from_daily(index_code)
 
     async def get_stock_rank_list(self, count: int = 20) -> list[dict]:
-        """获取A股涨幅榜前N只，降级时用日K数据"""
+        """获取A股涨幅榜，降级链：东方财富 → 新浪 → 蓝筹兜底"""
+        # 尝试东方财富
         try:
             df = await _run_sync(ak.stock_zh_a_spot_em)
+            return self._parse_rank_em(df, count)
+        except Exception:
+            logger.warning("东方财富涨幅榜不可用，尝试新浪")
+
+        # 尝试新浪
+        try:
+            df = await _run_sync(ak.stock_zh_a_spot)
+            df["涨跌幅"] = df["changepercent"].astype(float)
             df = df.sort_values("涨跌幅", ascending=False).head(count)
             result = []
             for _, r in df.iterrows():
                 result.append({
-                    "code": str(r["代码"]),
-                    "name": str(r["名称"]),
-                    "price": float(r["最新价"]),
-                    "change_pct": float(r["涨跌幅"]),
-                    "volume": float(r.get("成交量", 0)),
-                    "amount": float(r.get("成交额", 0)),
-                    "turnover": float(r.get("换手率", 0)),
+                    "code": str(r.get("code", r.get("symbol", ""))),
+                    "name": str(r.get("name", "")),
+                    "price": float(r.get("trade", r.get("close", 0))),
+                    "change_pct": float(r.get("changepercent", 0)),
+                    "volume": float(r.get("volume", 0)),
+                    "amount": float(r.get("amount", 0)),
+                    "turnover": 0,
                 })
             return result
         except Exception:
-            logger.warning("东方财富涨幅榜不可用，跳过")
-            return []
+            logger.warning("新浪涨幅榜也不可用，用蓝筹兜底")
+
+        # 最终兜底：用预设蓝筹股拉日K
+        return await self._bluechip_fallback()
+
+    @staticmethod
+    def _parse_rank_em(df, count: int) -> list[dict]:
+        df = df.sort_values("涨跌幅", ascending=False).head(count)
+        result = []
+        for _, r in df.iterrows():
+            result.append({
+                "code": str(r["代码"]),
+                "name": str(r["名称"]),
+                "price": float(r["最新价"]),
+                "change_pct": float(r["涨跌幅"]),
+                "volume": float(r.get("成交量", 0)),
+                "amount": float(r.get("成交额", 0)),
+                "turnover": float(r.get("换手率", 0)),
+            })
+        return result
+
+    _BLUECHIP_CODES = [
+        "600519", "000858", "601318", "600036", "000001",
+        "600900", "601012", "000333", "002594", "601888",
+        "600276", "000568", "002415", "600309", "601166",
+    ]
+
+    async def _bluechip_fallback(self) -> list[dict]:
+        """用预设蓝筹股的最新日K构造榜单"""
+        result = []
+        for code in self._BLUECHIP_CODES[:10]:
+            bars = await self.get_stock_history(code, days=2)
+            if not bars:
+                continue
+            latest = bars[-1]
+            result.append({
+                "code": code,
+                "name": code,
+                "price": latest.close,
+                "change_pct": latest.change_pct,
+                "volume": latest.volume,
+                "amount": latest.amount,
+                "turnover": 0,
+            })
+        result.sort(key=lambda x: x["change_pct"], reverse=True)
+        return result
 
     async def get_sector_fund_flow(self, count: int = 10) -> list[dict]:
         """获取板块资金流向排行"""
