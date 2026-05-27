@@ -10,13 +10,11 @@ from domain.models.stock import FundFlow, StockDailyBar, StockQuote
 
 logger = logging.getLogger(__name__)
 
-# 简易限频锁
 _rate_lock = asyncio.Lock()
 _last_call_time: float = 0.0
 
 
 async def _throttle():
-    """AKShare 调用限频，防反爬"""
     global _last_call_time
     async with _rate_lock:
         now = asyncio.get_event_loop().time()
@@ -27,55 +25,81 @@ async def _throttle():
 
 
 async def _run_sync(func, *args, **kwargs):
-    """在线程池中执行同步 akshare 调用"""
     await _throttle()
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 
+def _tx_symbol(code: str) -> str:
+    """股票代码 → 腾讯格式：sz000001 / sh600000"""
+    if code.startswith(("6", "9")):
+        return f"sh{code}"
+    return f"sz{code}"
+
+
 class AKShareClient:
-    """AKShare 数据采集封装"""
+    """AKShare 数据采集 — 新浪(实时) + 腾讯(日K) + 新浪(指数)
+    东方财富源在云服务器上被反爬封禁，全部移除。
+    """
+
+    # ── 个股日K（腾讯源）──
 
     async def get_stock_history(
         self, code: str, days: int = 60
     ) -> list[StockDailyBar]:
-        """获取个股日K线"""
         end_date = date.today()
-        start_date = end_date - timedelta(days=days + 30)  # 多取一些防节假日不足
+        start_date = end_date - timedelta(days=days + 30)
         try:
             df = await _run_sync(
-                ak.stock_zh_a_hist,
-                symbol=code,
-                period="daily",
+                ak.stock_zh_a_hist_tx,
+                symbol=_tx_symbol(code),
                 start_date=start_date.strftime("%Y%m%d"),
                 end_date=end_date.strftime("%Y%m%d"),
                 adjust="qfq",
             )
         except Exception as e:
-            logger.error("获取 %s 日K失败: %s", code, e)
+            logger.error("获取 %s 日K失败(腾讯源): %s", code, e)
+            return []
+
+        if df.empty:
             return []
 
         bars = []
+        prev_close = None
         for _, row in df.tail(days).iterrows():
+            close = float(row["close"])
+            # 腾讯源无涨跌幅列，手动计算
+            change_pct = 0.0
+            if prev_close and prev_close != 0:
+                change_pct = round((close - prev_close) / prev_close * 100, 2)
+            prev_close = close
+
+            trade_date = row["date"]
+            if isinstance(trade_date, str):
+                trade_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
+            elif isinstance(trade_date, datetime):
+                trade_date = trade_date.date()
+
             bars.append(
                 StockDailyBar(
                     code=code,
-                    trade_date=row["日期"].date() if isinstance(row["日期"], datetime) else row["日期"],
-                    open=float(row["开盘"]),
-                    high=float(row["最高"]),
-                    low=float(row["最低"]),
-                    close=float(row["收盘"]),
-                    volume=float(row["成交量"]),
-                    amount=float(row["成交额"]),
-                    change_pct=float(row["涨跌幅"]),
+                    trade_date=trade_date,
+                    open=float(row["open"]),
+                    high=float(row["high"]),
+                    low=float(row["low"]),
+                    close=close,
+                    volume=float(row.get("amount", 0)),
+                    amount=0,
+                    change_pct=change_pct,
                 )
             )
         return bars
 
+    # ── 个股实时行情（新浪源）──
+
     async def get_realtime_quote(self, code: str) -> StockQuote | None:
-        """获取个股实时行情，东方财富接口失败时降级到日K最新一条"""
         try:
-            df = await _run_sync(ak.stock_zh_a_spot_em)
+            df = await _run_sync(ak.stock_zh_a_spot)
             row = df[df["代码"] == code]
             if row.empty:
                 return None
@@ -93,14 +117,17 @@ class AKShareClient:
                 prev_close=float(r["昨收"]),
             )
         except Exception:
-            logger.warning("东方财富个股接口不可用，降级到日K: %s", code)
+            logger.warning("新浪实时行情不可用，降级到腾讯日K: %s", code)
             return await self._quote_from_daily(code)
 
+    # ── 个股资金流向 ──
+
     async def get_fund_flow(self, code: str) -> list[FundFlow]:
-        """获取个股资金流向（近日）"""
         try:
             df = await _run_sync(
-                ak.stock_individual_fund_flow, stock=code, market="sh" if code.startswith("6") else "sz"
+                ak.stock_individual_fund_flow,
+                stock=code,
+                market="sh" if code.startswith("6") else "sz",
             )
         except Exception as e:
             logger.error("获取 %s 资金流向失败: %s", code, e)
@@ -121,81 +148,73 @@ class AKShareClient:
             )
         return flows
 
-    async def get_market_index(self, index_code: str = "000001") -> StockQuote | None:
-        """获取指数行情，东方财富接口失败时降级到新浪日K"""
-        # 优先尝试东方财富实时接口
-        try:
-            df = await _run_sync(ak.stock_zh_index_spot_em)
-            row = df[df["代码"] == index_code]
-            if not row.empty:
-                r = row.iloc[0]
-                return StockQuote(
-                    code=index_code,
-                    name=str(r["名称"]),
-                    price=float(r["最新价"]),
-                    change_pct=float(r["涨跌幅"]),
-                    volume=float(r.get("成交量", 0)),
-                    amount=float(r.get("成交额", 0)),
-                    high=float(r.get("最高", 0)),
-                    low=float(r.get("最低", 0)),
-                    open_price=float(r.get("今开", 0)),
-                    prev_close=float(r.get("昨收", 0)),
-                )
-        except Exception:
-            logger.warning("东方财富指数接口不可用，降级到新浪日K: %s", index_code)
+    # ── 指数行情（新浪日K）──
 
-        # 降级：新浪日K最新一条
-        return await self._index_from_daily(index_code)
+    _INDEX_SYMBOL_MAP = {
+        "000001": "sh000001",
+        "399001": "sz399001",
+        "399006": "sz399006",
+    }
+    _INDEX_NAME_MAP = {
+        "000001": "上证指数",
+        "399001": "深证成指",
+        "399006": "创业板指",
+    }
+
+    async def get_market_index(self, index_code: str = "000001") -> StockQuote | None:
+        symbol = self._INDEX_SYMBOL_MAP.get(index_code, f"sh{index_code}")
+        try:
+            df = await _run_sync(ak.stock_zh_index_daily, symbol=symbol)
+            if df.empty:
+                return None
+            r = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) >= 2 else r
+            prev_close = float(prev["close"])
+            close = float(r["close"])
+            change_pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else 0
+            return StockQuote(
+                code=index_code,
+                name=self._INDEX_NAME_MAP.get(index_code, index_code),
+                price=close,
+                change_pct=change_pct,
+                volume=float(r.get("volume", 0)),
+                amount=0,
+                high=float(r["high"]),
+                low=float(r["low"]),
+                open_price=float(r["open"]),
+                prev_close=prev_close,
+            )
+        except Exception as e:
+            logger.error("获取指数 %s 失败: %s", index_code, e)
+            return None
+
+    # ── 涨幅榜（新浪源）──
 
     async def get_stock_rank_list(self, count: int = 20) -> list[dict]:
-        """获取A股涨幅榜，降级链：东方财富 → 新浪 → 蓝筹兜底"""
-        # 尝试东方财富
-        try:
-            df = await _run_sync(ak.stock_zh_a_spot_em)
-            return self._parse_rank_em(df, count)
-        except Exception:
-            logger.warning("东方财富涨幅榜不可用，尝试新浪")
-
-        # 尝试新浪
         try:
             df = await _run_sync(ak.stock_zh_a_spot)
-            df["涨跌幅"] = df["changepercent"].astype(float)
+            # 新浪源列名：代码, 名称, 最新价, 涨跌幅, 成交量, 成交额, 最高, 最低, 今开, 昨收
+            df["涨跌幅"] = df["涨跌幅"].astype(float)
             df = df.sort_values("涨跌幅", ascending=False).head(count)
             result = []
             for _, r in df.iterrows():
                 result.append({
-                    "code": str(r.get("code", r.get("symbol", ""))),
-                    "name": str(r.get("name", "")),
-                    "price": float(r.get("trade", r.get("close", 0))),
-                    "change_pct": float(r.get("changepercent", 0)),
-                    "volume": float(r.get("volume", 0)),
-                    "amount": float(r.get("amount", 0)),
+                    "code": str(r["代码"]),
+                    "name": str(r["名称"]),
+                    "price": float(r["最新价"]),
+                    "change_pct": float(r["涨跌幅"]),
+                    "volume": float(r.get("成交量", 0)),
+                    "amount": float(r.get("成交额", 0)),
                     "turnover": 0,
                 })
             return result
-        except Exception:
-            logger.warning("新浪涨幅榜也不可用，用蓝筹兜底")
+        except Exception as e:
+            logger.error("获取涨幅榜失败: %s", e)
+            return []
 
-        return []
-
-    @staticmethod
-    def _parse_rank_em(df, count: int) -> list[dict]:
-        df = df.sort_values("涨跌幅", ascending=False).head(count)
-        result = []
-        for _, r in df.iterrows():
-            result.append({
-                "code": str(r["代码"]),
-                "name": str(r["名称"]),
-                "price": float(r["最新价"]),
-                "change_pct": float(r["涨跌幅"]),
-                "volume": float(r.get("成交量", 0)),
-                "amount": float(r.get("成交额", 0)),
-                "turnover": float(r.get("换手率", 0)),
-            })
-        return result
+    # ── 板块资金流向 ──
 
     async def get_sector_fund_flow(self, count: int = 10) -> list[dict]:
-        """获取板块资金流向排行"""
         try:
             df = await _run_sync(ak.stock_sector_fund_flow_rank, indicator="今日")
             result = []
@@ -210,50 +229,9 @@ class AKShareClient:
             logger.warning("板块资金流向接口不可用，跳过")
             return []
 
-    # ── 降级方法：东方财富接口不可用时，用新浪日K填充 ──
-
-    _INDEX_SYMBOL_MAP = {
-        "000001": "sh000001",
-        "399001": "sz399001",
-        "399006": "sz399006",
-    }
-
-    _INDEX_NAME_MAP = {
-        "000001": "上证指数",
-        "399001": "深证成指",
-        "399006": "创业板指",
-    }
-
-    async def _index_from_daily(self, index_code: str) -> StockQuote | None:
-        """用新浪日K最新一条构造指数行情"""
-        symbol = self._INDEX_SYMBOL_MAP.get(index_code, f"sh{index_code}")
-        try:
-            df = await _run_sync(ak.stock_zh_index_daily, symbol=symbol)
-            if df.empty:
-                return None
-            r = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) >= 2 else r
-            prev_close = float(prev["close"])
-            close = float(r["close"])
-            change_pct = ((close - prev_close) / prev_close * 100) if prev_close else 0
-            return StockQuote(
-                code=index_code,
-                name=self._INDEX_NAME_MAP.get(index_code, index_code),
-                price=close,
-                change_pct=round(change_pct, 2),
-                volume=float(r.get("volume", 0)),
-                amount=0,
-                high=float(r["high"]),
-                low=float(r["low"]),
-                open_price=float(r["open"]),
-                prev_close=prev_close,
-            )
-        except Exception as e:
-            logger.error("新浪指数日K也失败 %s: %s", index_code, e)
-            return None
+    # ── 内部降级方法 ──
 
     async def _quote_from_daily(self, code: str) -> StockQuote | None:
-        """用个股日K最新一条构造行情"""
         bars = await self.get_stock_history(code, days=2)
         if not bars:
             return None
@@ -273,7 +251,6 @@ class AKShareClient:
         )
 
     async def is_trade_day(self, d: date | None = None) -> bool:
-        """判断是否为交易日"""
         d = d or date.today()
         try:
             df = await _run_sync(ak.tool_trade_date_hist_sina)
@@ -281,4 +258,4 @@ class AKShareClient:
             return d.strftime("%Y-%m-%d") in trade_dates
         except Exception as e:
             logger.warning("获取交易日历失败，默认为交易日: %s", e)
-            return d.weekday() < 5  # 降级：周一到周五
+            return d.weekday() < 5
