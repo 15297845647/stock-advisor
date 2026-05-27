@@ -23,6 +23,21 @@ logging.basicConfig(
 logger = logging.getLogger("stock-advisor")
 
 
+def _extract_text(content) -> str:
+    """从 ACP content 字段提取纯文本，兼容 str / list 格式"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(parts)
+    return str(content) if content else ""
+
+
 class StockAdvisorAgent:
     """直接通过 stdio JSON-RPC 与 cc-connect 通信的 ACP Agent"""
 
@@ -30,7 +45,6 @@ class StockAdvisorAgent:
         self.chat_service = ChatService()
         self.user_router = UserRouter()
         self._db_ready = False
-        self._sessions: dict[str, dict] = {}
 
     async def _ensure_db(self):
         if not self._db_ready:
@@ -57,8 +71,10 @@ class StockAdvisorAgent:
                 logger.warning("invalid JSON: %s", line[:200])
                 continue
 
+            logger.debug("recv: %s", json.dumps(request, ensure_ascii=False)[:500])
             response = await self._dispatch(request)
             if response is not None:
+                logger.debug("send: %s", json.dumps(response, ensure_ascii=False)[:500])
                 self._send(response)
 
     def _send(self, obj: dict):
@@ -77,12 +93,13 @@ class StockAdvisorAgent:
             if method == "initialize":
                 result = await self._handle_initialize(params)
             elif method == "session/new":
-                result = await self._handle_session_new(params)
+                result = self._handle_session_new(params)
             elif method == "session/prompt":
-                result = await self._handle_session_prompt(req_id, params)
-                return None  # prompt 通过 notification 流式返回
+                result = await self._handle_session_prompt(params)
             elif method == "session/stop":
                 result = self._handle_session_stop(params)
+            elif method == "ping":
+                result = {"pong": True}
             else:
                 logger.warning("unknown method: %s", method)
                 return self._rpc_error(req_id, -32601, f"Method not found: {method}")
@@ -104,38 +121,35 @@ class StockAdvisorAgent:
             "agentInfo": {"name": "stock-advisor", "version": "1.0.0"},
         }
 
-    async def _handle_session_new(self, params: dict) -> dict:
+    def _handle_session_new(self, params: dict) -> dict:
         session_id = str(uuid.uuid4())
-        self._sessions[session_id] = {"messages": []}
         logger.info("session created: %s", session_id)
         return {"sessionId": session_id}
 
-    async def _handle_session_prompt(self, req_id, params: dict):
+    async def _handle_session_prompt(self, params: dict) -> dict:
         session_id = params.get("sessionId", "")
         messages = params.get("messages", [])
 
-        if not messages:
-            self._send(self._rpc_result(req_id, self._make_update(session_id, "没有收到消息内容。")))
-            return
+        logger.info("prompt params keys: %s", list(params.keys()))
+        logger.info("messages count: %d", len(messages))
+        for i, m in enumerate(messages):
+            logger.info("  msg[%d] role=%s content_type=%s content_preview=%s",
+                        i, m.get("role"), type(m.get("content")).__name__,
+                        str(m.get("content", ""))[:100])
 
-        # 提取最后一条用户消息
+        if not messages:
+            return self._make_result(session_id, "没有收到消息内容。")
+
+        # 提取最后一条用户消息文本
         last_msg = messages[-1]
-        raw_content = ""
-        content = last_msg.get("content", "")
-        if isinstance(content, str):
-            raw_content = content
-        elif isinstance(content, list):
-            raw_content = " ".join(
-                p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
-            )
+        raw_content = _extract_text(last_msg.get("content", ""))
 
         # 提取用户身份
-        user_id = self.user_router.extract_user_id(messages)
+        user_id = self._get_user_id(params, messages)
         user_message = self.user_router.strip_user_prefix(raw_content)
 
         if not user_message.strip():
-            self._send(self._rpc_result(req_id, self._make_update(session_id, "请输入你想查询的内容。")))
-            return
+            return self._make_result(session_id, "请输入你想查询的内容。")
 
         logger.info("User=%s Message=%s", user_id, user_message[:80])
 
@@ -147,22 +161,50 @@ class StockAdvisorAgent:
             logger.exception("chat service error")
             response = f"处理出错：{e}"
 
-        self._send(self._rpc_result(req_id, self._make_update(session_id, response)))
+        logger.info("Response length: %d chars", len(response))
+        return self._make_result(session_id, response)
 
     def _handle_session_stop(self, params: dict) -> dict:
-        session_id = params.get("sessionId", "")
-        self._sessions.pop(session_id, None)
         return {"stopped": True}
+
+    def _get_user_id(self, params: dict, messages: list[dict]) -> str:
+        """从 params metadata 或消息内容提取用户 ID"""
+        # cc-connect 可能在 params 级别附带 session metadata
+        meta = params.get("metadata", {})
+        if isinstance(meta, dict):
+            for key in ("sender", "from", "user_id", "userId"):
+                if meta.get(key):
+                    return str(meta[key])
+
+        # 从消息中提取
+        for msg in reversed(messages):
+            if msg.get("role") != "user":
+                continue
+            text = _extract_text(msg.get("content", ""))
+            if text.startswith("[") and "]" in text:
+                bracket_end = text.index("]")
+                uid = text[1:bracket_end].strip()
+                if uid:
+                    return uid
+            # 消息级 metadata
+            msg_meta = msg.get("metadata", {})
+            if isinstance(msg_meta, dict):
+                for key in ("sender", "from", "user_id", "userId"):
+                    if msg_meta.get(key):
+                        return str(msg_meta[key])
+
+        return "default_user"
 
     # ── helpers ──
 
     @staticmethod
-    def _make_update(session_id: str, text: str) -> dict:
+    def _make_result(session_id: str, text: str) -> dict:
+        """构造 ACP session/prompt 响应"""
         return {
             "sessionId": session_id,
             "messages": [{
                 "role": "assistant",
-                "content": [{"type": "text", "text": text}],
+                "content": text,
             }],
             "state": "completed",
         }
