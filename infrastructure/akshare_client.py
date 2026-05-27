@@ -73,7 +73,7 @@ class AKShareClient:
         return bars
 
     async def get_realtime_quote(self, code: str) -> StockQuote | None:
-        """获取个股实时行情"""
+        """获取个股实时行情，东方财富接口失败时降级到日K最新一条"""
         try:
             df = await _run_sync(ak.stock_zh_a_spot_em)
             row = df[df["代码"] == code]
@@ -92,9 +92,9 @@ class AKShareClient:
                 open_price=float(r["今开"]),
                 prev_close=float(r["昨收"]),
             )
-        except Exception as e:
-            logger.error("获取 %s 实时行情失败: %s", code, e)
-            return None
+        except Exception:
+            logger.warning("东方财富个股接口不可用，降级到日K: %s", code)
+            return await self._quote_from_daily(code)
 
     async def get_fund_flow(self, code: str) -> list[FundFlow]:
         """获取个股资金流向（近日）"""
@@ -122,28 +122,92 @@ class AKShareClient:
         return flows
 
     async def get_market_index(self, index_code: str = "000001") -> StockQuote | None:
-        """获取指数实时行情（如上证指数000001）"""
+        """获取指数行情，东方财富接口失败时降级到新浪日K"""
+        # 优先尝试东方财富实时接口
         try:
             df = await _run_sync(ak.stock_zh_index_spot_em)
             row = df[df["代码"] == index_code]
-            if row.empty:
+            if not row.empty:
+                r = row.iloc[0]
+                return StockQuote(
+                    code=index_code,
+                    name=str(r["名称"]),
+                    price=float(r["最新价"]),
+                    change_pct=float(r["涨跌幅"]),
+                    volume=float(r.get("成交量", 0)),
+                    amount=float(r.get("成交额", 0)),
+                    high=float(r.get("最高", 0)),
+                    low=float(r.get("最低", 0)),
+                    open_price=float(r.get("今开", 0)),
+                    prev_close=float(r.get("昨收", 0)),
+                )
+        except Exception:
+            logger.warning("东方财富指数接口不可用，降级到新浪日K: %s", index_code)
+
+        # 降级：新浪日K最新一条
+        return await self._index_from_daily(index_code)
+
+    # ── 降级方法：东方财富接口不可用时，用新浪日K填充 ──
+
+    _INDEX_SYMBOL_MAP = {
+        "000001": "sh000001",
+        "399001": "sz399001",
+        "399006": "sz399006",
+    }
+
+    _INDEX_NAME_MAP = {
+        "000001": "上证指数",
+        "399001": "深证成指",
+        "399006": "创业板指",
+    }
+
+    async def _index_from_daily(self, index_code: str) -> StockQuote | None:
+        """用新浪日K最新一条构造指数行情"""
+        symbol = self._INDEX_SYMBOL_MAP.get(index_code, f"sh{index_code}")
+        try:
+            df = await _run_sync(ak.stock_zh_index_daily, symbol=symbol)
+            if df.empty:
                 return None
-            r = row.iloc[0]
+            r = df.iloc[-1]
+            prev = df.iloc[-2] if len(df) >= 2 else r
+            prev_close = float(prev["close"])
+            close = float(r["close"])
+            change_pct = ((close - prev_close) / prev_close * 100) if prev_close else 0
             return StockQuote(
                 code=index_code,
-                name=str(r["名称"]),
-                price=float(r["最新价"]),
-                change_pct=float(r["涨跌幅"]),
-                volume=float(r.get("成交量", 0)),
-                amount=float(r.get("成交额", 0)),
-                high=float(r.get("最高", 0)),
-                low=float(r.get("最低", 0)),
-                open_price=float(r.get("今开", 0)),
-                prev_close=float(r.get("昨收", 0)),
+                name=self._INDEX_NAME_MAP.get(index_code, index_code),
+                price=close,
+                change_pct=round(change_pct, 2),
+                volume=float(r.get("volume", 0)),
+                amount=0,
+                high=float(r["high"]),
+                low=float(r["low"]),
+                open_price=float(r["open"]),
+                prev_close=prev_close,
             )
         except Exception as e:
-            logger.error("获取指数 %s 失败: %s", index_code, e)
+            logger.error("新浪指数日K也失败 %s: %s", index_code, e)
             return None
+
+    async def _quote_from_daily(self, code: str) -> StockQuote | None:
+        """用个股日K最新一条构造行情"""
+        bars = await self.get_stock_history(code, days=2)
+        if not bars:
+            return None
+        latest = bars[-1]
+        prev_close = bars[-2].close if len(bars) >= 2 else latest.close
+        return StockQuote(
+            code=code,
+            name=code,
+            price=latest.close,
+            change_pct=latest.change_pct,
+            volume=latest.volume,
+            amount=latest.amount,
+            high=latest.high,
+            low=latest.low,
+            open_price=latest.open,
+            prev_close=prev_close,
+        )
 
     async def is_trade_day(self, d: date | None = None) -> bool:
         """判断是否为交易日"""
