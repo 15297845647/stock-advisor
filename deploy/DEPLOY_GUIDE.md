@@ -6,12 +6,14 @@
 
 ## 你需要准备什么
 
-| 东西 | 说明 |
-|------|------|
-| 一台云服务器 | 推荐腾讯云/阿里云轻量应用服务器，2核2G 就够，Ubuntu 22.04 系统，约 60 元/月 |
-| MiniMax API Key | 去 [MiniMax 开放平台](https://www.minimaxi.com/) 注册获取 |
-| 一个微信号 | 当机器人用的微信号（别人加它为好友后就能对话） |
-| SSH 工具 | Mac 自带终端就行；Windows 用 [Termius](https://termius.com/) 或 PuTTY |
+
+| 东西              | 说明                                                           |
+| --------------- | ------------------------------------------------------------ |
+| 一台云服务器          | 推荐腾讯云/阿里云轻量应用服务器，2核2G 就够，Ubuntu 22.04 系统，约 60 元/月            |
+| MiniMax API Key | 去 [MiniMax 开放平台](https://www.minimaxi.com/) 注册获取             |
+| 一个微信号           | 当机器人用的微信号（别人加它为好友后就能对话）                                      |
+| SSH 工具          | Mac 自带终端就行；Windows 用 [Termius](https://termius.com/) 或 PuTTY |
+
 
 ---
 
@@ -38,6 +40,7 @@ apt-get install -y python3.11 python3.11-venv git nodejs npm
 ```
 
 > 如果提示 python3.11 找不到，先执行：
+>
 > ```bash
 > apt-get install -y software-properties-common
 > add-apt-repository ppa:deadsnakes/ppa -y
@@ -115,6 +118,7 @@ nano .env
 > ```
 >
 > **你需要改的：**
+>
 > 1. 把 `your-minimax-api-key-here` 替换成你的 MiniMax API Key
 > 2. 把 `changeme` 替换成你想设的管理后台密码
 >
@@ -216,7 +220,7 @@ systemctl start stock-advisor
 systemctl status stock-advisor
 ```
 
-> 看到 **`active (running)`** 就成功了。
+> 看到 `**active (running)**` 就成功了。
 
 ---
 
@@ -224,14 +228,16 @@ systemctl status stock-advisor
 
 你以后可能会用到的命令，收藏备用：
 
-| 操作 | 命令 |
-|------|------|
-| 查看运行状态 | `systemctl status stock-advisor` |
-| 查看实时日志 | `journalctl -u stock-advisor -f` |
-| 重启服务 | `systemctl restart stock-advisor` |
-| 停止服务 | `systemctl stop stock-advisor` |
-| 启动服务 | `systemctl start stock-advisor` |
-| 打开管理后台 | 浏览器访问 `http://你的服务器IP:8900` |
+
+| 操作     | 命令                                |
+| ------ | --------------------------------- |
+| 查看运行状态 | `systemctl status stock-advisor`  |
+| 查看实时日志 | `journalctl -u stock-advisor -f`  |
+| 重启服务   | `systemctl restart stock-advisor` |
+| 停止服务   | `systemctl stop stock-advisor`    |
+| 启动服务   | `systemctl start stock-advisor`   |
+| 打开管理后台 | 浏览器访问 `http://你的服务器IP:8900`       |
+
 
 ---
 
@@ -254,6 +260,7 @@ systemctl restart stock-advisor
 如果浏览器访问 `http://服务器IP:8900` 打不开，可能是防火墙没放行：
 
 **服务器防火墙：**
+
 ```bash
 ufw allow 8900/tcp
 ```
@@ -266,13 +273,17 @@ ufw allow 8900/tcp
 ## 常见问题
 
 ### Q: 扫码绑定微信后，过几天断了怎么办？
+
 ilink 协议会自动重连。如果确实断了，执行 `cc-connect weixin setup --project stock-advisor` 重新扫码，然后 `systemctl restart stock-advisor`。
 
 ### Q: AI 回复很慢
+
 检查 MiniMax API 余额是否充足。也可以在管理后台「配置管理」里换用更快的模型。
 
 ### Q: 怎么限制只有特定的人能用？
+
 编辑 `~/.cc-connect/config.toml`，把 `allow_from = "*"` 改成指定的微信 ID，逗号分隔。然后 `systemctl restart stock-advisor`。
 
 ### Q: 服务器重启后还能自动运行吗？
+
 能。第九步的 `systemctl enable` 已经设好了开机自启。

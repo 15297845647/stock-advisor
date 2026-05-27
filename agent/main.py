@@ -44,7 +44,7 @@ class StockAdvisorAgent(Agent):
         start_admin_server()
         logger.info("StockAdvisorAgent initialized")
         return {
-            "protocolVersion": "2025-11-01",
+            "protocolVersion": 1,
             "agentInfo": {"name": "stock-advisor", "version": "1.0.0"},
         }
 
