@@ -65,6 +65,43 @@ def build_analysis_prompt(
     )
 
 
+def build_recommend_prompt(
+    ctx: UserContext,
+    rank_data: list[dict],
+    sector_data: list[dict],
+) -> str:
+    """构造选股推荐 prompt"""
+    template = _load_template("recommend.txt")
+
+    risk_map = {"conservative": "保守型", "moderate": "稳健型", "aggressive": "激进型"}
+    style_map = {"day": "短线", "swing": "波段", "position": "中长线"}
+
+    rank_lines = []
+    for s in rank_data:
+        rank_lines.append(
+            f"  {s['code']} {s['name']}  "
+            f"价格{s['price']}  涨跌{s['change_pct']:+.2f}%  "
+            f"换手{s.get('turnover', 0):.1f}%"
+        )
+    rank_text = "\n".join(rank_lines) if rank_lines else "数据暂不可用"
+
+    sector_lines = []
+    for sec in sector_data:
+        flow = sec.get("main_net_inflow", 0)
+        sector_lines.append(
+            f"  {sec['name']}  涨跌{sec['change_pct']:+.2f}%  "
+            f"主力净流入{flow/1e8:.1f}亿"
+        )
+    sector_text = "\n".join(sector_lines) if sector_lines else "数据暂不可用"
+
+    return template.format(
+        risk_level=risk_map.get(ctx.profile.risk_level, ctx.profile.risk_level),
+        trade_style=style_map.get(ctx.profile.trade_style, ctx.profile.trade_style),
+        rank_data=rank_text,
+        sector_data=sector_text,
+    )
+
+
 def build_chat_prompt(ctx: UserContext, user_message: str) -> str:
     """构造对话 prompt（注入用户上下文）"""
     template = _load_template("chat.txt")

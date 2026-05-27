@@ -147,6 +147,43 @@ class AKShareClient:
         # 降级：新浪日K最新一条
         return await self._index_from_daily(index_code)
 
+    async def get_stock_rank_list(self, count: int = 20) -> list[dict]:
+        """获取A股涨幅榜前N只，降级时用日K数据"""
+        try:
+            df = await _run_sync(ak.stock_zh_a_spot_em)
+            df = df.sort_values("涨跌幅", ascending=False).head(count)
+            result = []
+            for _, r in df.iterrows():
+                result.append({
+                    "code": str(r["代码"]),
+                    "name": str(r["名称"]),
+                    "price": float(r["最新价"]),
+                    "change_pct": float(r["涨跌幅"]),
+                    "volume": float(r.get("成交量", 0)),
+                    "amount": float(r.get("成交额", 0)),
+                    "turnover": float(r.get("换手率", 0)),
+                })
+            return result
+        except Exception:
+            logger.warning("东方财富涨幅榜不可用，跳过")
+            return []
+
+    async def get_sector_fund_flow(self, count: int = 10) -> list[dict]:
+        """获取板块资金流向排行"""
+        try:
+            df = await _run_sync(ak.stock_sector_fund_flow_rank, indicator="今日")
+            result = []
+            for _, r in df.head(count).iterrows():
+                result.append({
+                    "name": str(r.get("名称", "")),
+                    "change_pct": float(r.get("涨跌幅", 0)),
+                    "main_net_inflow": float(r.get("主力净流入-净额", 0)),
+                })
+            return result
+        except Exception:
+            logger.warning("板块资金流向接口不可用，跳过")
+            return []
+
     # ── 降级方法：东方财富接口不可用时，用新浪日K填充 ──
 
     _INDEX_SYMBOL_MAP = {

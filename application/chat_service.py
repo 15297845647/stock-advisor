@@ -6,7 +6,8 @@ from application.analysis_service import AnalysisService
 from application.subscription_service import SubscriptionService
 from domain.intent_parser import Intent, parse_intent
 from domain.models.user_context import UserContext
-from domain.prompt_builder import build_chat_prompt, build_system_prompt
+from domain.prompt_builder import build_chat_prompt, build_recommend_prompt, build_system_prompt
+from infrastructure.akshare_client import AKShareClient
 from infrastructure.minimax_client import MiniMaxClient
 from repository.user_repository import UserRepository
 
@@ -19,6 +20,7 @@ class ChatService:
         self.subscription = SubscriptionService()
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
+        self.akshare = AKShareClient()
 
     async def handle(self, wechat_id: str, message: str, ctx: UserContext) -> str:
         """处理一条用户消息，返回回复文本"""
@@ -57,6 +59,9 @@ class ChatService:
             case Intent.MARKET_OVERVIEW:
                 return await self.analysis.get_market_overview()
 
+            case Intent.RECOMMEND:
+                return await self._handle_recommend(ctx)
+
             case Intent.FREE_CHAT:
                 return await self._handle_free_chat(ctx, message)
 
@@ -65,6 +70,19 @@ class ChatService:
             # 没提取到代码，用MiniMax理解用户说的是哪只股票
             return await self._handle_free_chat(ctx, message)
         return await self.analysis.analyze_stock(stock_code)
+
+    async def _handle_recommend(self, ctx: UserContext) -> str:
+        """选股推荐 — 拉涨幅榜+板块数据 → MiniMax 分析推荐"""
+        rank_data = await self.akshare.get_stock_rank_list(count=20)
+        sector_data = await self.akshare.get_sector_fund_flow(count=10)
+
+        if not rank_data and not sector_data:
+            return "暂时无法获取行情数据，请稍后再试。"
+
+        system = build_system_prompt()
+        user_prompt = build_recommend_prompt(ctx, rank_data, sector_data)
+        messages = [{"role": "user", "content": user_prompt}]
+        return await self.minimax.chat(system_prompt=system, messages=messages)
 
     async def _handle_free_chat(self, ctx: UserContext, message: str) -> str:
         """自由对话 — 将完整上下文注入MiniMax"""
