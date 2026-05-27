@@ -202,16 +202,15 @@ class StockAdvisorAgent:
     # ── helpers ──
 
     def _send_update(self, session_id: str, text: str):
-        """发送 session/update 通知（ACP 协议：文本内容通过通知下发）"""
+        """发送 session/update 通知（ACP 协议：agent_message_chunk）"""
         notification = {
             "jsonrpc": "2.0",
             "method": "session/update",
             "params": {
                 "sessionId": session_id,
-                "kind": "message",
-                "message": {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": text}],
+                "update": {
+                    "kind": "agent_message_chunk",
+                    "content": {"type": "text", "text": text},
                 },
             },
         }
