@@ -12,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent.user_router import UserRouter  # noqa: E402
 from application.chat_service import ChatService  # noqa: E402
 from infrastructure.database import init_db  # noqa: E402
-from admin.startup import start_admin_server  # noqa: E402
 from scheduler.daily_push import setup_scheduler  # noqa: E402
 
 logging.basicConfig(
@@ -114,7 +113,6 @@ class StockAdvisorAgent:
     async def _handle_initialize(self, params: dict) -> dict:
         await self._ensure_db()
         setup_scheduler()
-        start_admin_server()
         logger.info("StockAdvisorAgent initialized")
         return {
             "protocolVersion": 1,

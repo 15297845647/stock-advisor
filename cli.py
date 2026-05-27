@@ -19,10 +19,12 @@ def cmd_start(args):
 
 
 def cmd_admin(args):
-    """仅启动管理后台 Web 服务"""
+    """独立启动管理后台 Web 服务"""
     import uvicorn
     from agent.config import ADMIN_PORT
+    from infrastructure.database import init_db
 
+    asyncio.run(init_db())
     port = args.port or ADMIN_PORT
     print(f"管理后台启动中 → http://0.0.0.0:{port}")
     uvicorn.run("admin.server:app", host="0.0.0.0", port=port, log_level="info")
