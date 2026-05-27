@@ -3,17 +3,15 @@
 
 [[projects]]
 name = "stock-advisor"
-work_dir = "/Users/shy/stock-advisor"
+work_dir = "/opt/stock-advisor"
 
 [projects.agent]
 type = "acp"
-command = "python"
-args = ["agent/main.py"]
 
-[projects.agent.env]
-MINIMAX_API_KEY = "your-minimax-api-key"
-PYTHONPATH = "/Users/shy/stock-advisor"
-DB_PATH = "/Users/shy/stock-advisor/data/stock_advisor.db"
+[projects.agent.options]
+command = "/opt/stock-advisor/.venv/bin/python"
+args = ["agent/main.py"]
+env = { MINIMAX_API_KEY = "your-minimax-api-key", PYTHONPATH = "/opt/stock-advisor", DB_PATH = "/opt/stock-advisor/data/stock_advisor.db" }
 
 [[projects.platforms]]
 type = "weixin"
