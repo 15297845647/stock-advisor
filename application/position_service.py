@@ -27,10 +27,14 @@ class PositionService:
         validated = []
         for p in positions:
             code = p.get("stock_code")
-            if not code:
+            if not code or len(str(code)) != 6:
                 continue
 
-            # 用 AKShare 验证代码并补全名称
+            # 数量和成本都没有 → 信息不足，跳过
+            if not p.get("shares") and not p.get("cost_price"):
+                logger.info("LLM 标记 %s 但数量和成本均为空，跳过", code)
+                continue
+
             quote = await self.akshare.get_realtime_quote(str(code))
             if quote:
                 validated.append({
