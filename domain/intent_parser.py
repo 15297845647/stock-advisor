@@ -12,7 +12,6 @@ class Intent(Enum):
     SHOW_WATCHLIST = auto()   # 查看关注列表
     MARKET_OVERVIEW = auto()  # 大盘概览
     RECOMMEND = auto()        # 推荐/选股
-    ADD_POSITION = auto()     # 买入/建仓
     CLOSE_POSITION = auto()   # 卖出/平仓
     SHOW_POSITIONS = auto()   # 查看持仓
     CONFIRM = auto()          # 确认操作
@@ -25,7 +24,6 @@ class ParsedIntent:
     intent: Intent
     stock_code: str | None = None
     raw_text: str = ""
-    shares: int | None = None
     price: float | None = None
 
 
@@ -56,40 +54,20 @@ _WATCHLIST_KW = {"关注列表", "自选股", "我的关注", "我关注了什�
 _MARKET_KW = {"大盘", "上证", "沪深", "市场", "指数", "今天行情"}
 _RECOMMEND_KW = {"推荐", "选股", "买什么", "热点股", "龙头", "强势股", "牛股", "推荐几只", "有什么好股"}
 _ANALYZE_KW = {"分析", "看看", "怎么样", "走势", "技术面", "帮我看", "诊断", "研判"}
-_ADD_POSITION_KW = {
-    "买入", "建仓", "加仓", "持有", "买了", "入了",
-    "当前有", "手里有", "手上有", "目前有", "我有",
-    "录入持仓", "记录持仓", "添加持仓",
-}
 _CLOSE_POSITION_KW = {"卖出", "平仓", "清仓", "出了", "卖了", "减仓", "止盈", "止损"}
 _SHOW_POSITION_KW = {"持仓", "我的仓位", "仓位", "持有什么", "我买了什么", "看看持仓", "当前持仓"}
 _CONFIRM_KW = {"确认", "确定", "是的", "对的", "没错", "录入", "保存", "ok", "OK", "好的"}
 _CANCEL_KW = {"取消", "算了", "不要了", "不录了", "放弃"}
 
-# 匹配数量：100股 / 1000手 / 100份
-_SHARES_RE = re.compile(r"(\d+)\s*(?:股|手|份)")
-# 匹配价格：成本18.5 / 价格18.5 / 18.5元 / 均价18.5
-_PRICE_RE = re.compile(r"(?:成本|价格|均价|买入价)?(\d+(?:\.\d+)?)\s*(?:元|块)?")
-
-
-def _extract_shares(text: str) -> int | None:
-    m = _SHARES_RE.search(text)
-    return int(m.group(1)) if m else None
+# 匹配价格（仅用于 CLOSE_POSITION 提取卖出价）
+_PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:元|块)")
 
 
 def _extract_price(text: str) -> float | None:
-    """从文本中提取价格（排除股票代码和数量干扰）"""
     cleaned = _CODE_RE.sub("", text)
-    cleaned = _SHORT_CODE_RE.sub("", cleaned)
-    cleaned = _SHARES_RE.sub("", cleaned)
-    # 优先匹配带前缀的价格（成本xx / 均价xx / 成本是xx）
-    prefixed = re.search(r"(?:成本|价格|均价|买入价)\s*(?:是|为|在)?\s*(\d+(?:\.\d+)?)", cleaned)
-    if prefixed:
-        return float(prefixed.group(1))
-    # 兜底：匹配 xx元/块
-    suffixed = re.search(r"(\d+(?:\.\d+)?)\s*(?:元|块)", cleaned)
-    if suffixed:
-        val = float(suffixed.group(1))
+    m = _PRICE_RE.search(cleaned)
+    if m:
+        val = float(m.group(1))
         if 0.01 < val < 100000:
             return val
     return None
@@ -138,21 +116,14 @@ def parse_intent(text: str) -> ParsedIntent:
         price = _extract_price(text_lower)
         return ParsedIntent(Intent.CLOSE_POSITION, stock_code=code, raw_text=text, price=price)
 
-    # 建仓/买入
-    if any(kw in text_lower for kw in _ADD_POSITION_KW):
-        code = _extract_code(text_lower)
-        shares = _extract_shares(text_lower)
-        price = _extract_price(text_lower)
-        return ParsedIntent(Intent.ADD_POSITION, stock_code=code, raw_text=text,
-                            shares=shares, price=price)
-
-    # 分析个股（含代码 or 分析关键词+代码）
+    # 分析个股 — 必须含分析关键词，纯代码不算（可能是在描述持仓等其他语境）
+    has_analyze_kw = any(kw in text_lower for kw in _ANALYZE_KW)
     code = _extract_code(text_lower)
-    if code:
+    if has_analyze_kw:
         return ParsedIntent(Intent.ANALYZE_STOCK, stock_code=code, raw_text=text)
-
-    if any(kw in text_lower for kw in _ANALYZE_KW):
-        return ParsedIntent(Intent.ANALYZE_STOCK, stock_code=None, raw_text=text)
+    if code and len(text_lower) <= 10:
+        # 短消息只含代码 → 视为分析请求
+        return ParsedIntent(Intent.ANALYZE_STOCK, stock_code=code, raw_text=text)
 
     # 兜底：自由对话
     return ParsedIntent(Intent.FREE_CHAT, raw_text=text)

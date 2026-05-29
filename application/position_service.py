@@ -1,10 +1,8 @@
-"""持仓管理编排 — LLM 语境提取 → 确认 → 录入 / 平仓 / 查询 / 盈亏"""
+"""持仓管理编排 — LLM 语境标记 → 确认 → 录入 / 平仓 / 查询 / 盈亏"""
 
 import logging
 
-from domain.position_extractor import build_extract_prompt, parse_extraction_result
 from infrastructure.akshare_client import AKShareClient
-from infrastructure.minimax_client import MiniMaxClient
 from repository.position_repository import PositionRepository
 
 logger = logging.getLogger(__name__)
@@ -17,52 +15,46 @@ class PositionService:
     def __init__(self):
         self.repo = PositionRepository()
         self.akshare = AKShareClient()
-        self.minimax = MiniMaxClient()
 
-    # ── LLM 语境检测 ──
+    # ── 从 LLM 标记存入 pending ──
 
-    async def detect_position_context(self, wechat_id: str, message: str) -> str | None:
-        """用 MiniMax 分析消息是否包含持仓信息，有则返回确认文本，无则返回 None"""
-        prompt = build_extract_prompt(message)
-        llm_response = await self.minimax.chat(
-            system_prompt="你是一个 JSON 提取器，只返回 JSON，不要其他文字。",
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-        result = parse_extraction_result(llm_response)
-        if not result:
+    async def store_pending_from_llm(self, wechat_id: str, llm_data: dict) -> str | None:
+        """从 MiniMax 响应中的 [POSITION] 数据验证并存入 pending，返回确认文本"""
+        positions = llm_data.get("positions", [])
+        if not positions:
             return None
 
-        positions = result["positions"]
-
-        # 补全股票名称（用 AKShare 验证代码）
         validated = []
         for p in positions:
-            code = p["stock_code"]
-            quote = await self.akshare.get_realtime_quote(code)
+            code = p.get("stock_code")
+            if not code:
+                continue
+
+            # 用 AKShare 验证代码并补全名称
+            quote = await self.akshare.get_realtime_quote(str(code))
             if quote:
-                p["stock_name"] = quote.name
-                p["current_price"] = quote.price
-                validated.append(p)
+                validated.append({
+                    "stock_code": str(code),
+                    "stock_name": quote.name,
+                    "shares": p.get("shares"),
+                    "cost_price": p.get("cost_price"),
+                    "current_price": quote.price,
+                })
             else:
-                logger.warning("LLM 提取的股票代码 %s 无效，跳过", code)
+                logger.warning("LLM 标记的股票代码 %s 无效，跳过", code)
 
         if not validated:
             return None
 
-        # 存入 pending
         _pending[wechat_id] = validated
-
-        # 构造确认消息
         return self._build_confirm_message(validated)
 
     def _build_confirm_message(self, positions: list[dict]) -> str:
-        """构造待确认的持仓信息文本"""
         lines = ["📋 检测到以下持仓信息：\n"]
 
         for i, p in enumerate(positions, 1):
-            shares_text = f"{p['shares']}股" if p.get("shares") else "数量未知"
-            cost_text = f"成本{p['cost_price']:.2f}" if p.get("cost_price") else "成本未知"
+            shares_text = f"{p['shares']}股" if p.get("shares") else "数量未提供"
+            cost_text = f"成本{p['cost_price']:.2f}" if p.get("cost_price") else "成本未提供"
             current = p.get("current_price")
             current_text = f"（现价{current:.2f}）" if current else ""
 
@@ -71,7 +63,6 @@ class PositionService:
                 f" {shares_text} {cost_text}{current_text}"
             )
 
-        # 提示缺失信息
         missing = []
         for p in positions:
             if not p.get("shares"):
@@ -89,8 +80,7 @@ class PositionService:
 
     # ── 确认 / 取消 ──
 
-    async def confirm_pending(self, wechat_id: str) -> str:
-        """确认录入 pending 持仓"""
+    async def confirm_pending(self, wechat_id: str) -> str | None:
         positions = _pending.pop(wechat_id, None)
         if not positions:
             return None
@@ -113,7 +103,6 @@ class PositionService:
         return "\n".join(lines)
 
     def cancel_pending(self, wechat_id: str) -> str | None:
-        """取消 pending"""
         if _pending.pop(wechat_id, None):
             return "已取消录入。"
         return None
@@ -121,13 +110,10 @@ class PositionService:
     def has_pending(self, wechat_id: str) -> bool:
         return wechat_id in _pending
 
-    # ── 直接操作（关键词明确触发时仍可用）──
+    # ── 平仓 / 查询 ──
 
     async def close_position(
-        self,
-        wechat_id: str,
-        stock_code: str,
-        sell_price: float | None,
+        self, wechat_id: str, stock_code: str, sell_price: float | None,
     ) -> str:
         if not stock_code:
             return "请提供股票代码，如「卖出 600519」或「卖出 600519 185元」。"
@@ -181,7 +167,6 @@ class PositionService:
         return "\n".join(lines)
 
     async def build_position_summary(self, positions: list[dict]) -> str:
-        """为策略推送构建持仓摘要文本"""
         lines = []
         for p in positions:
             code = p["stock_code"]

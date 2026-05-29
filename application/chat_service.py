@@ -1,9 +1,12 @@
-"""对话编排 — 意图识别 → 路由到对应处理 → 返回结果
+"""对话编排 — 意图识别 → 路由 → 返回结果
 
-持仓录入走 LLM 语境检测 → 用户确认 → 写入，不直接存储。
+持仓录入完全依赖 LLM 语境理解：MiniMax 在对话响应中自动标记
+[POSITION] 数据 → 解析 → 询问用户确认 → 写入。
 """
 
+import json
 import logging
+import re
 
 from application.analysis_service import AnalysisService
 from application.position_service import PositionService
@@ -16,6 +19,10 @@ from infrastructure.minimax_client import MiniMaxClient
 from repository.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
+
+_POSITION_TAG_RE = re.compile(
+    r"\[POSITION\]\s*(\{.*?\})\s*\[/POSITION\]", re.DOTALL
+)
 
 
 class ChatService:
@@ -39,19 +46,16 @@ class ChatService:
         return response
 
     async def _dispatch(self, wechat_id, parsed, ctx, message) -> str:
-        # 优先处理确认/取消（有 pending 状态时）
-        if parsed.intent == Intent.CONFIRM:
-            result = await self.position.confirm_pending(wechat_id)
-            if result:
-                return result
-            # 没有 pending，当自由对话处理
-            return await self._handle_free_chat(ctx, message)
-
-        if parsed.intent == Intent.CANCEL:
-            result = self.position.cancel_pending(wechat_id)
-            if result:
-                return result
-            return await self._handle_free_chat(ctx, message)
+        # 有 pending 持仓时，优先处理确认/取消
+        if self.position.has_pending(wechat_id):
+            if parsed.intent == Intent.CONFIRM:
+                result = await self.position.confirm_pending(wechat_id)
+                if result:
+                    return result
+            if parsed.intent == Intent.CANCEL:
+                result = self.position.cancel_pending(wechat_id)
+                if result:
+                    return result
 
         match parsed.intent:
             case Intent.ANALYZE_STOCK:
@@ -76,9 +80,6 @@ class ChatService:
             case Intent.RECOMMEND:
                 return await self._handle_recommend(ctx)
 
-            case Intent.ADD_POSITION:
-                return await self._handle_position_detect(wechat_id, message)
-
             case Intent.CLOSE_POSITION:
                 return await self.position.close_position(
                     wechat_id, parsed.stock_code, parsed.price)
@@ -86,45 +87,66 @@ class ChatService:
             case Intent.SHOW_POSITIONS:
                 return await self.position.show_positions(wechat_id)
 
-            case Intent.FREE_CHAT:
-                return await self._handle_free_chat_with_position_detect(wechat_id, ctx, message)
+            case _:
+                # FREE_CHAT / ADD_POSITION / CONFIRM(无pending) / CANCEL(无pending) → 通用对话
+                return await self._handle_chat_with_position_detect(wechat_id, ctx, message)
 
-    # ── 持仓语境检测（用 LLM）──
-
-    async def _handle_position_detect(self, wechat_id: str, message: str) -> str:
-        """关键词触发的建仓 → 走 LLM 提取 + 确认"""
-        result = await self.position.detect_position_context(wechat_id, message)
-        if result:
-            return result
-        return "没有识别到有效的持仓信息。请告诉我股票名称、数量和成本价，如「我有茅台500股，成本1800」。"
-
-    async def _handle_free_chat_with_position_detect(
+    async def _handle_chat_with_position_detect(
         self, wechat_id: str, ctx: UserContext, message: str
     ) -> str:
-        """自由对话也检测持仓语境 — 命中则走确认流程，否则正常聊天"""
-        # 快速判断：消息中含有数字+股票相关词汇才尝试检测
-        if self._might_contain_position(message):
-            result = await self.position.detect_position_context(wechat_id, message)
-            if result:
-                return result
+        """通用对话 — MiniMax 正常回复，同时自动检测持仓语境"""
+        response = await self._call_chat(ctx, message)
 
-        return await self._handle_free_chat(ctx, message)
+        # 从响应中提取 [POSITION] 标记
+        position_data = self._extract_position_tag(response)
+        if not position_data:
+            return response
 
-    @staticmethod
-    def _might_contain_position(text: str) -> bool:
-        """快速预判消息是否可能含持仓信息（避免每条消息都调 LLM）"""
-        import re
-        has_number = bool(re.search(r"\d", text))
-        if not has_number:
-            return False
-        position_hints = {"股", "手", "仓", "成本", "均价", "买", "持有", "有"}
-        return any(h in text for h in position_hints)
+        # 剥离标记，保留正常对话内容
+        clean_response = _POSITION_TAG_RE.sub("", response).strip()
 
-    # ── 原有处理 ──
+        # 验证股票代码并存入 pending
+        confirm_text = await self.position.store_pending_from_llm(wechat_id, position_data)
+        if not confirm_text:
+            return clean_response
+
+        # 拼接：正常回复 + 确认提示
+        return f"{clean_response}\n\n{confirm_text}"
+
+    def _extract_position_tag(self, response: str) -> dict | None:
+        """从 MiniMax 响应中解析 [POSITION]...[/POSITION] 标记"""
+        match = _POSITION_TAG_RE.search(response)
+        if not match:
+            return None
+
+        try:
+            data = json.loads(match.group(1))
+            positions = data.get("positions", [])
+            if not positions:
+                return None
+            return data
+        except (json.JSONDecodeError, KeyError):
+            logger.warning("解析 POSITION 标记失败: %s", match.group(1)[:200])
+            return None
+
+    async def _call_chat(self, ctx: UserContext, message: str) -> str:
+        """调用 MiniMax 对话（system prompt 已包含持仓检测指令）"""
+        system = build_system_prompt()
+        user_prompt = build_chat_prompt(ctx, message)
+
+        messages = []
+        for msg in ctx.recent_chat:
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": user_prompt})
+
+        return await self.minimax.chat(system_prompt=system, messages=messages)
+
+    # ── 其他处理 ──
 
     async def _handle_analyze(self, stock_code: str | None, ctx: UserContext, message: str) -> str:
         if not stock_code:
-            return await self._handle_free_chat(ctx, message)
+            return await self._handle_chat_with_position_detect(
+                ctx.profile.wechat_id, ctx, message)
         return await self.analysis.analyze_stock(stock_code)
 
     async def _handle_recommend(self, ctx: UserContext) -> str:
@@ -137,15 +159,4 @@ class ChatService:
         system = build_system_prompt()
         user_prompt = build_recommend_prompt(ctx, rank_data, sector_data)
         messages = [{"role": "user", "content": user_prompt}]
-        return await self.minimax.chat(system_prompt=system, messages=messages)
-
-    async def _handle_free_chat(self, ctx: UserContext, message: str) -> str:
-        system = build_system_prompt()
-        user_prompt = build_chat_prompt(ctx, message)
-
-        messages = []
-        for msg in ctx.recent_chat:
-            messages.append({"role": msg.role, "content": msg.content})
-        messages.append({"role": "user", "content": user_prompt})
-
         return await self.minimax.chat(system_prompt=system, messages=messages)
