@@ -1,7 +1,22 @@
+"""AKShare 数据采集
+
+数据源策略（基于 AKShare 文档）：
+- 实时行情: stock_zh_a_spot_em（东方财富，稳定不封IP）
+- 日K历史: stock_zh_a_hist（东方财富，含涨跌幅/换手率/成交额）
+- 指数行情: index_zh_a_hist（东方财富，含涨跌幅）
+- 资金流向: stock_individual_fund_flow（东方财富）
+- 板块资金: stock_sector_fund_flow_rank（东方财富）
+- 交易日历: tool_trade_date_hist_sina（新浪）
+
+全量行情缓存 60s，避免重复请求。
+所有接口自动重试 2 次。
+"""
+
 import asyncio
 import json
 import logging
 import os
+import time
 from datetime import date, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -9,40 +24,102 @@ from pathlib import Path
 import akshare as ak
 
 from agent.config import AKSHARE_REQUEST_INTERVAL
-from domain.models.stock import FundFlow, StockDailyBar, StockQuote
+from domain.models.stock import FundFlow, StockDailyBar, StockNews, StockQuote
 
 logger = logging.getLogger(__name__)
 
-_rate_lock = asyncio.Lock()
-_last_call_time: float = 0.0
-
 _CACHE_DIR = Path(os.environ.get("DB_PATH", "data/stock_advisor.db")).parent / "cache"
 
+# ── 限频（按接口分组，互不阻塞）──
 
-async def _throttle():
-    global _last_call_time
-    async with _rate_lock:
-        now = asyncio.get_event_loop().time()
-        elapsed = now - _last_call_time
+_rate_locks: dict[str, asyncio.Lock] = {}
+_last_call_times: dict[str, float] = {}
+
+
+def _get_lock(group: str) -> asyncio.Lock:
+    if group not in _rate_locks:
+        _rate_locks[group] = asyncio.Lock()
+    return _rate_locks[group]
+
+
+async def _throttle(group: str = "default"):
+    lock = _get_lock(group)
+    async with lock:
+        now = time.monotonic()
+        elapsed = now - _last_call_times.get(group, 0)
         if elapsed < AKSHARE_REQUEST_INTERVAL:
             await asyncio.sleep(AKSHARE_REQUEST_INTERVAL - elapsed)
-        _last_call_time = asyncio.get_event_loop().time()
+        _last_call_times[group] = time.monotonic()
 
 
-async def _run_sync(func, *args, **kwargs):
-    await _throttle()
+async def _run_sync(func, *args, group: str = "default", **kwargs):
+    await _throttle(group)
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, partial(func, *args, **kwargs))
 
 
-def _tx_symbol(code: str) -> str:
-    if code.startswith(("6", "9")):
-        return f"sh{code}"
-    return f"sz{code}"
+async def _run_with_retry(func, *args, group: str = "default", retries: int = 2, **kwargs):
+    for attempt in range(retries + 1):
+        try:
+            return await _run_sync(func, *args, group=group, **kwargs)
+        except Exception as e:
+            if attempt < retries:
+                wait = (attempt + 1) * 2
+                logger.warning("%s 失败(第%d次)，%ds后重试: %s", func.__name__, attempt + 1, wait, e)
+                await asyncio.sleep(wait)
+            else:
+                raise
 
+
+# ── 全量行情内存缓存（60s TTL）──
+
+_spot_cache_data = None
+_spot_cache_time: float = 0
+_spot_cache_lock = asyncio.Lock()
+_SPOT_CACHE_TTL = 60
+
+
+async def _get_spot_df():
+    """获取 A 股全量行情，60s 缓存，东财 → 新浪 fallback"""
+    global _spot_cache_data, _spot_cache_time
+
+    async with _spot_cache_lock:
+        now = time.monotonic()
+        if _spot_cache_data is not None and (now - _spot_cache_time) < _SPOT_CACHE_TTL:
+            return _spot_cache_data
+
+        # 优先东方财富（稳定不封IP）
+        try:
+            df = await _run_with_retry(ak.stock_zh_a_spot_em, group="spot")
+            if df is not None and not df.empty:
+                _spot_cache_data = df
+                _spot_cache_time = time.monotonic()
+                logger.info("全量行情已刷新(东财源)，共 %d 条", len(df))
+                return df
+        except Exception as e:
+            logger.warning("东财实时行情失败: %s，尝试新浪源", e)
+
+        # 降级新浪（注意：频繁调用会被封IP）
+        try:
+            df = await _run_with_retry(ak.stock_zh_a_spot, group="spot_sina")
+            if df is not None and not df.empty:
+                _spot_cache_data = df
+                _spot_cache_time = time.monotonic()
+                logger.info("全量行情已刷新(新浪源)，共 %d 条", len(df))
+                return df
+        except Exception as e:
+            logger.error("新浪实时行情也失败: %s", e)
+
+        # 两源都挂：返回上一次缓存（即使过期）
+        if _spot_cache_data is not None:
+            logger.warning("行情源均不可用，使用过期缓存")
+            return _spot_cache_data
+        raise RuntimeError("所有实时行情源均不可用")
+
+
+# ── 文件缓存 ──
 
 def _save_cache(name: str, data: list[dict]):
-    """缓存数据到 JSON 文件，标记日期"""
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     payload = {"date": date.today().isoformat(), "data": data}
     (_CACHE_DIR / f"{name}.json").write_text(
@@ -51,7 +128,6 @@ def _save_cache(name: str, data: list[dict]):
 
 
 def _load_cache(name: str, max_age_days: int = 1) -> list[dict]:
-    """读取缓存，超过 max_age_days 天视为过期"""
     path = _CACHE_DIR / f"{name}.json"
     if not path.exists():
         return []
@@ -59,7 +135,6 @@ def _load_cache(name: str, max_age_days: int = 1) -> list[dict]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         cached_date = date.fromisoformat(payload["date"])
         if (date.today() - cached_date).days <= max_age_days:
-            logger.info("使用缓存数据: %s (%s)", name, cached_date)
             return payload["data"]
     except Exception:
         pass
@@ -67,37 +142,76 @@ def _load_cache(name: str, max_age_days: int = 1) -> list[dict]:
 
 
 class AKShareClient:
-    """AKShare 数据采集 — 新浪(实时) + 腾讯(日K) + 新浪(指数)
-    东方财富源在云服务器上被反爬封禁，全部移除。
-    """
 
-    # ── 个股日K（腾讯源）──
+    # ── 个股日K（东财 → 腾讯 fallback）──
 
-    async def get_stock_history(
-        self, code: str, days: int = 60
-    ) -> list[StockDailyBar]:
+    async def get_stock_history(self, code: str, days: int = 60) -> list[StockDailyBar]:
         end_date = date.today()
         start_date = end_date - timedelta(days=days + 30)
+
+        # 优先东财（字段完整：含涨跌幅/成交额/换手率）
+        bars = await self._hist_from_eastmoney(code, start_date, end_date, days)
+        if bars:
+            return bars
+
+        # 降级腾讯（缺涨跌幅，需手动算）
+        logger.info("%s 东财日K失败，尝试腾讯源", code)
+        return await self._hist_from_tencent(code, start_date, end_date, days)
+
+    async def _hist_from_eastmoney(self, code, start_date, end_date, days) -> list[StockDailyBar]:
         try:
-            df = await _run_sync(
-                ak.stock_zh_a_hist_tx,
-                symbol=_tx_symbol(code),
+            df = await _run_with_retry(
+                ak.stock_zh_a_hist,
+                symbol=code, period="daily",
                 start_date=start_date.strftime("%Y%m%d"),
                 end_date=end_date.strftime("%Y%m%d"),
-                adjust="qfq",
+                adjust="qfq", group="hist",
             )
         except Exception as e:
-            logger.error("获取 %s 日K失败(腾讯源): %s", code, e)
+            logger.warning("东财日K %s 失败: %s", code, e)
             return []
 
-        if df.empty:
+        if df is None or df.empty:
+            return []
+
+        bars = []
+        for _, row in df.tail(days).iterrows():
+            trade_date = row["日期"]
+            if isinstance(trade_date, str):
+                trade_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
+            elif isinstance(trade_date, datetime):
+                trade_date = trade_date.date()
+            bars.append(StockDailyBar(
+                code=code, trade_date=trade_date,
+                open=float(row["开盘"]), high=float(row["最高"]),
+                low=float(row["最低"]), close=float(row["收盘"]),
+                volume=float(row.get("成交量", 0)),
+                amount=float(row.get("成交额", 0)),
+                change_pct=float(row.get("涨跌幅", 0)),
+            ))
+        return bars
+
+    async def _hist_from_tencent(self, code, start_date, end_date, days) -> list[StockDailyBar]:
+        symbol = f"sh{code}" if code.startswith(("6", "9")) else f"sz{code}"
+        try:
+            df = await _run_with_retry(
+                ak.stock_zh_a_hist_tx,
+                symbol=symbol,
+                start_date=start_date.strftime("%Y%m%d"),
+                end_date=end_date.strftime("%Y%m%d"),
+                adjust="qfq", group="hist_tx",
+            )
+        except Exception as e:
+            logger.error("腾讯日K %s 也失败: %s", code, e)
+            return []
+
+        if df is None or df.empty:
             return []
 
         bars = []
         prev_close = None
         for _, row in df.tail(days).iterrows():
             close = float(row["close"])
-            # 腾讯源无涨跌幅列，手动计算
             change_pct = 0.0
             if prev_close and prev_close != 0:
                 change_pct = round((close - prev_close) / prev_close * 100, 2)
@@ -108,30 +222,23 @@ class AKShareClient:
                 trade_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
             elif isinstance(trade_date, datetime):
                 trade_date = trade_date.date()
-
-            bars.append(
-                StockDailyBar(
-                    code=code,
-                    trade_date=trade_date,
-                    open=float(row["open"]),
-                    high=float(row["high"]),
-                    low=float(row["low"]),
-                    close=close,
-                    volume=float(row.get("amount", 0)),
-                    amount=0,
-                    change_pct=change_pct,
-                )
-            )
+            bars.append(StockDailyBar(
+                code=code, trade_date=trade_date,
+                open=float(row["open"]), high=float(row["high"]),
+                low=float(row["low"]), close=close,
+                volume=float(row.get("amount", 0)), amount=0,
+                change_pct=change_pct,
+            ))
         return bars
 
-    # ── 个股实时行情（新浪源 + 腾讯降级）──
+    # ── 个股实时行情（东财源 + 日K降级）──
 
     async def get_realtime_quote(self, code: str) -> StockQuote | None:
         try:
-            df = await _run_sync(ak.stock_zh_a_spot)
+            df = await _get_spot_df()
             row = df[df["代码"] == code]
             if row.empty:
-                return None
+                return await self._quote_from_daily(code)
             r = row.iloc[0]
             return StockQuote(
                 code=code,
@@ -145,29 +252,36 @@ class AKShareClient:
                 open_price=float(r["今开"]),
                 prev_close=float(r["昨收"]),
             )
-        except Exception:
-            logger.warning("新浪实时行情不可用，降级到腾讯日K: %s", code)
+        except Exception as e:
+            logger.warning("实时行情获取失败(%s): %s", code, e)
         return await self._quote_from_daily(code)
 
     # ── 个股资金流向 ──
 
     async def get_fund_flow(self, code: str) -> list[FundFlow]:
         try:
-            df = await _run_sync(
+            df = await _run_with_retry(
                 ak.stock_individual_fund_flow,
                 stock=code,
                 market="sh" if code.startswith("6") else "sz",
+                group="fund",
             )
         except Exception as e:
             logger.error("获取 %s 资金流向失败: %s", code, e)
             return []
 
+        if df is None or df.empty:
+            return []
+
         flows = []
         for _, row in df.tail(5).iterrows():
+            trade_date = row["日期"]
+            if isinstance(trade_date, datetime):
+                trade_date = trade_date.date()
             flows.append(
                 FundFlow(
                     code=code,
-                    trade_date=row["日期"].date() if isinstance(row["日期"], datetime) else row["日期"],
+                    trade_date=trade_date,
                     main_net_inflow=float(row.get("主力净流入-净额", 0)),
                     super_large_net=float(row.get("超大单净流入-净额", 0)),
                     large_net=float(row.get("大单净流入-净额", 0)),
@@ -177,13 +291,46 @@ class AKShareClient:
             )
         return flows
 
-    # ── 指数行情（新浪日K）──
+    # ── 个股新闻（东方财富）──
 
-    _INDEX_SYMBOL_MAP = {
-        "000001": "sh000001",
-        "399001": "sz399001",
-        "399006": "sz399006",
-    }
+    async def get_stock_news(self, code: str, limit: int = 20) -> list[StockNews]:
+        """获取个股新闻 + 公告，合并返回"""
+        news_list: list[StockNews] = []
+
+        # 新闻
+        try:
+            df = await _run_with_retry(ak.stock_news_em, symbol=code, group="news")
+            if df is not None and not df.empty:
+                for _, row in df.head(limit).iterrows():
+                    news_list.append(StockNews(
+                        title=str(row.get("新闻标题", row.get("title", ""))),
+                        source=str(row.get("新闻来源", row.get("source", ""))),
+                        time=str(row.get("发布时间", row.get("time", ""))),
+                        url=str(row.get("新闻链接", row.get("url", ""))),
+                        news_type="news",
+                    ))
+        except Exception as e:
+            logger.warning("获取 %s 新闻失败: %s", code, e)
+
+        # 公告
+        try:
+            df = await _run_with_retry(ak.stock_notice_report, symbol=code, group="news")
+            if df is not None and not df.empty:
+                for _, row in df.head(10).iterrows():
+                    news_list.append(StockNews(
+                        title=str(row.get("公告标题", row.get("title", ""))),
+                        source="公司公告",
+                        time=str(row.get("公告日期", row.get("date", ""))),
+                        url=str(row.get("公告链接", row.get("url", ""))),
+                        news_type="announcement",
+                    ))
+        except Exception as e:
+            logger.warning("获取 %s 公告失败（非关键）: %s", code, e)
+
+        return news_list
+
+    # ── 指数行情（东方财富，含涨跌幅）──
+
     _INDEX_NAME_MAP = {
         "000001": "上证指数",
         "399001": "深证成指",
@@ -191,37 +338,42 @@ class AKShareClient:
     }
 
     async def get_market_index(self, index_code: str = "000001") -> StockQuote | None:
-        symbol = self._INDEX_SYMBOL_MAP.get(index_code, f"sh{index_code}")
+        end_date = date.today().strftime("%Y%m%d")
+        start_date = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
         try:
-            df = await _run_sync(ak.stock_zh_index_daily, symbol=symbol)
-            if df.empty:
+            df = await _run_with_retry(
+                ak.index_zh_a_hist,
+                symbol=index_code,
+                period="daily",
+                start_date=start_date,
+                end_date=end_date,
+                group="index",
+            )
+            if df is None or df.empty:
                 return None
             r = df.iloc[-1]
-            prev = df.iloc[-2] if len(df) >= 2 else r
-            prev_close = float(prev["close"])
-            close = float(r["close"])
-            change_pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else 0
             return StockQuote(
                 code=index_code,
                 name=self._INDEX_NAME_MAP.get(index_code, index_code),
-                price=close,
-                change_pct=change_pct,
-                volume=float(r.get("volume", 0)),
-                amount=0,
-                high=float(r["high"]),
-                low=float(r["low"]),
-                open_price=float(r["open"]),
-                prev_close=prev_close,
+                price=float(r["收盘"]),
+                change_pct=float(r.get("涨跌幅", 0)),
+                volume=float(r.get("成交量", 0)),
+                amount=float(r.get("成交额", 0)),
+                high=float(r["最高"]),
+                low=float(r["最低"]),
+                open_price=float(r["开盘"]),
+                prev_close=float(r["收盘"]) - float(r.get("涨跌额", 0)),
             )
         except Exception as e:
             logger.error("获取指数 %s 失败: %s", index_code, e)
             return None
 
-    # ── 涨幅榜（新浪源 + 文件缓存）──
+    # ── 涨幅榜（复用全量缓存 + 文件降级）──
 
     async def get_stock_rank_list(self, count: int = 20) -> list[dict]:
         try:
-            df = await _run_sync(ak.stock_zh_a_spot)
+            df = await _get_spot_df()
+            df = df.copy()
             df["涨跌幅"] = df["涨跌幅"].astype(float)
             df = df.sort_values("涨跌幅", ascending=False).head(count)
             result = []
@@ -233,38 +385,43 @@ class AKShareClient:
                     "change_pct": float(r["涨跌幅"]),
                     "volume": float(r.get("成交量", 0)),
                     "amount": float(r.get("成交额", 0)),
-                    "turnover": 0,
+                    "turnover": float(r.get("换手率", 0)),
                 })
             _save_cache("stock_rank", result)
             return result
         except Exception as e:
-            logger.warning("新浪涨幅榜不可用(%s)，尝试读取缓存", e)
+            logger.warning("涨幅榜不可用(%s)，尝试缓存", e)
 
         cached = _load_cache("stock_rank", max_age_days=1)
         if cached:
             return cached[:count]
-
-        logger.error("涨幅榜无数据：接口和缓存均不可用")
         return []
 
-    # ── 板块资金流向 ──
+    # ── 板块资金流向（修正列名）──
 
     async def get_sector_fund_flow(self, count: int = 10) -> list[dict]:
         try:
-            df = await _run_sync(ak.stock_sector_fund_flow_rank, indicator="今日")
+            df = await _run_with_retry(
+                ak.stock_sector_fund_flow_rank,
+                indicator="今日",
+                sector_type="行业资金流",
+                group="sector",
+            )
+            if df is None or df.empty:
+                return []
             result = []
             for _, r in df.head(count).iterrows():
                 result.append({
                     "name": str(r.get("名称", "")),
-                    "change_pct": float(r.get("涨跌幅", 0)),
+                    "change_pct": float(r.get("今日涨跌幅", 0)),
                     "main_net_inflow": float(r.get("主力净流入-净额", 0)),
                 })
             return result
-        except Exception:
-            logger.warning("板块资金流向接口不可用，跳过")
+        except Exception as e:
+            logger.warning("板块资金流向接口不可用: %s", e)
             return []
 
-    # ── 内部降级方法 ──
+    # ── 内部降级 ──
 
     async def _quote_from_daily(self, code: str) -> StockQuote | None:
         bars = await self.get_stock_history(code, days=2)
@@ -288,9 +445,9 @@ class AKShareClient:
     async def is_trade_day(self, d: date | None = None) -> bool:
         d = d or date.today()
         try:
-            df = await _run_sync(ak.tool_trade_date_hist_sina)
+            df = await _run_with_retry(ak.tool_trade_date_hist_sina, group="calendar")
             trade_dates = set(df["trade_date"].astype(str))
             return d.strftime("%Y-%m-%d") in trade_dates
         except Exception as e:
-            logger.warning("获取交易日历失败，默认为交易日: %s", e)
+            logger.warning("交易日历获取失败，默认按工作日: %s", e)
             return d.weekday() < 5

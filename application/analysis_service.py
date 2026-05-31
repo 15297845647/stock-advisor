@@ -1,8 +1,9 @@
-"""分析编排 — 拉数据 → 计算指标 → 构造prompt → 调MiniMax → 存报告"""
+"""分析编排 — 拉数据(行情+技术+资金+新闻) → 计算指标 → MiniMax → 结构化决策 → 存报告"""
 
 import logging
 from datetime import date
 
+from domain.decision_parser import extract_decision, format_decision
 from domain.models.analysis_report import AnalysisReport
 from domain.prompt_builder import build_analysis_prompt, build_system_prompt
 from domain.stock_analyzer import analyze_technical
@@ -22,42 +23,51 @@ class AnalysisService:
         self.report_repo = ReportRepository()
 
     async def analyze_stock(self, stock_code: str, force: bool = False) -> str:
-        """对一只股票做完整分析，返回报告文本"""
+        """综合分析：技术面 + 资金面 + 消息面 → 结构化决策"""
 
-        # 今日已有报告且非强制刷新，直接返回缓存
         if not force:
             cached = await self.report_repo.get_today_report(stock_code)
             if cached:
                 return cached.content
 
-        # 1. 获取行情数据
+        # 1. 实时行情
         quote = await self.akshare.get_realtime_quote(stock_code)
         if not quote:
             return f"未找到股票 {stock_code} 的行情数据，请确认代码是否正确。"
 
-        # 2. 获取日K + 缓存
+        # 2. 日K + 缓存
         bars = await self.akshare.get_stock_history(stock_code, days=60)
         if bars:
             await self.stock_repo.save_daily_bars(bars)
 
-        # 3. 计算技术指标
+        # 3. 技术指标
         tech = analyze_technical(bars)
         if not tech:
             return f"{quote.name}({stock_code}) 数据不足，无法完成技术分析。"
 
-        # 4. 获取资金流向
+        # 4. 资金流向
         fund_flows = await self.akshare.get_fund_flow(stock_code)
 
-        # 5. 构造分析prompt并调用MiniMax
-        analysis_prompt = build_analysis_prompt(quote, tech, fund_flows, bars)
+        # 5. 新闻/公告
+        news = await self.akshare.get_stock_news(stock_code, limit=20)
+
+        # 6. 构造 prompt → MiniMax
+        analysis_prompt = build_analysis_prompt(quote, tech, fund_flows, bars, news)
         system = build_system_prompt()
 
-        report_text = await self.minimax.chat(
+        raw_response = await self.minimax.chat(
             system_prompt=system,
             messages=[{"role": "user", "content": analysis_prompt}],
         )
 
-        # 6. 存储报告
+        # 7. 解析结构化决策
+        report_text, decision = extract_decision(raw_response)
+
+        # 8. 拼接最终输出
+        if decision:
+            report_text = report_text + format_decision(decision)
+
+        # 9. 存储报告
         report = AnalysisReport(
             stock_code=stock_code,
             report_date=date.today(),
@@ -68,7 +78,6 @@ class AnalysisService:
         return report_text
 
     async def get_market_overview(self) -> str:
-        """大盘概览"""
         indices = [
             ("000001", "上证指数"),
             ("399001", "深证成指"),

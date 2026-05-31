@@ -42,3 +42,25 @@ class FundFlow:
     large_net: float
     medium_net: float
     small_net: float
+
+
+@dataclass
+class StockNews:
+    """个股新闻/公告"""
+    title: str
+    source: str
+    time: str
+    url: str
+    news_type: str = "news"  # news / announcement
+
+
+@dataclass
+class StockDecision:
+    """结构化投资决策"""
+    action: str            # 买入 / 卖出 / 持有
+    target_price: float    # 目标价
+    stop_loss: float       # 止损价
+    confidence: float      # 置信度 0-100
+    risk_score: int        # 风险评分 1-10
+    reasoning: str         # 核心理由
+    key_points: list[str] = field(default_factory=list)

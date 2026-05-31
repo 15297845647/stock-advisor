@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from domain.models.stock import FundFlow, StockDailyBar, StockQuote
+from domain.models.stock import FundFlow, StockDailyBar, StockNews, StockQuote
 from domain.models.user_context import UserContext
 from domain.stock_analyzer import TechnicalSnapshot
 
@@ -22,13 +22,13 @@ def build_analysis_prompt(
     tech: TechnicalSnapshot,
     fund_flows: list[FundFlow],
     bars: list[StockDailyBar],
+    news: list[StockNews] | None = None,
 ) -> str:
-    """构造技术分析 prompt"""
+    """构造综合分析 prompt（技术面 + 资金面 + 消息面）"""
     template = _load_template("analysis.txt")
 
     ma60_line = f"MA60={tech.ma60}" if tech.ma60 else "MA60=数据不足"
 
-    # 资金流向文本
     flow_lines = []
     for f in fund_flows:
         flow_lines.append(
@@ -37,7 +37,6 @@ def build_analysis_prompt(
         )
     fund_flow_text = "\n".join(flow_lines) if flow_lines else "暂无数据"
 
-    # 近10日K线
     recent = bars[-10:] if len(bars) >= 10 else bars
     kline_lines = []
     for b in recent:
@@ -46,6 +45,14 @@ def build_analysis_prompt(
             f"收{b.close} 量{b.volume:.0f} 涨跌{b.change_pct:+.2f}%"
         )
     kline_summary = "\n".join(kline_lines)
+
+    # 新闻/公告文本
+    news_lines = []
+    if news:
+        for n in news[:15]:
+            tag = "📰" if n.news_type == "news" else "📋"
+            news_lines.append(f"  {tag} [{n.time}] {n.title}（{n.source}）")
+    news_text = "\n".join(news_lines) if news_lines else "暂无近期新闻"
 
     return template.format(
         stock_code=quote.code,
@@ -62,6 +69,7 @@ def build_analysis_prompt(
         support=tech.support, resistance=tech.resistance,
         fund_flow_text=fund_flow_text,
         kline_summary=kline_summary,
+        news_text=news_text,
     )
 
 

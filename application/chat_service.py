@@ -99,19 +99,49 @@ class ChatService:
 
         # 从响应中提取 [POSITION] 标记
         position_data = self._extract_position_tag(response)
-        if not position_data:
-            return response
-
-        # 剥离标记，保留正常对话内容
         clean_response = _POSITION_TAG_RE.sub("", response).strip()
+
+        if not position_data:
+            return clean_response
+
+        # 代码层硬过滤：用户原文必须满足持仓条件，不管 LLM 输出什么
+        if not self._user_message_has_position(message):
+            logger.info("LLM 输出了 POSITION 标记但用户原文不符合持仓条件，忽略: %s", message[:50])
+            return clean_response
 
         # 验证股票代码并存入 pending
         confirm_text = await self.position.store_pending_from_llm(wechat_id, position_data)
         if not confirm_text:
             return clean_response
 
-        # 拼接：正常回复 + 确认提示
         return f"{clean_response}\n\n{confirm_text}"
+
+    @staticmethod
+    def _user_message_has_position(text: str) -> bool:
+        """硬校验：用户原文是否真的在描述持仓（不依赖 LLM）
+
+        必须同时满足：
+        1. 含具体数字（数量或价格）
+        2. 含持仓量词（股/手/份）或成本词（成本/均价/买入价）
+        3. 不是纯策略/计划类表述
+        """
+        import re
+
+        # 排除：纯策略/计划/提问（无论含什么数字）
+        strategy_words = {"会", "准备", "打算", "计划", "想要", "应该", "建议",
+                          "可以", "能不能", "好不好", "要不要", "是否"}
+        if any(w in text for w in strategy_words) and not re.search(r"\d+\s*(?:股|手|份)", text):
+            return False
+
+        # 必须含数字
+        if not re.search(r"\d", text):
+            return False
+
+        # 必须含量词或成本词
+        has_unit = bool(re.search(r"\d+\s*(?:股|手|份)", text))
+        has_cost = any(w in text for w in ("成本", "均价", "买入价", "成本价"))
+
+        return has_unit or has_cost
 
     def _extract_position_tag(self, response: str) -> dict | None:
         """从 MiniMax 响应中解析 [POSITION]...[/POSITION] 标记"""
