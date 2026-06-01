@@ -141,6 +141,26 @@ def _load_cache(name: str, max_age_days: int = 1) -> list[dict]:
     return []
 
 
+def _col(df, *candidates) -> str | None:
+    """从 DataFrame 列名中匹配第一个存在的候选名（防 AKShare 上游改列名）"""
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def _col_val(row, *candidates, default=0):
+    """从行数据中取第一个匹配的列值"""
+    for c in candidates:
+        if c in row.index:
+            v = row[c]
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                return v
+    return default
+
+
 class AKShareClient:
 
     # ── 个股日K（东财 → 腾讯 fallback）──
@@ -236,21 +256,26 @@ class AKShareClient:
     async def get_realtime_quote(self, code: str) -> StockQuote | None:
         try:
             df = await _get_spot_df()
-            row = df[df["代码"] == code]
+            code_col = _col(df, "代码", "code", "symbol", "股票代码")
+            if not code_col:
+                logger.error("行情 DataFrame 无可识别的代码列: %s", list(df.columns)[:10])
+                return await self._quote_from_daily(code)
+
+            row = df[df[code_col] == code]
             if row.empty:
                 return await self._quote_from_daily(code)
             r = row.iloc[0]
             return StockQuote(
                 code=code,
-                name=str(r["名称"]),
-                price=float(r["最新价"]),
-                change_pct=float(r["涨跌幅"]),
-                volume=float(r["成交量"]),
-                amount=float(r["成交额"]),
-                high=float(r["最高"]),
-                low=float(r["最低"]),
-                open_price=float(r["今开"]),
-                prev_close=float(r["昨收"]),
+                name=str(_col_val(r, "名称", "name", "股票名称", default=code)),
+                price=_col_val(r, "最新价", "现价", "price", "trade", "close"),
+                change_pct=_col_val(r, "涨跌幅", "pct_chg", "changepercent"),
+                volume=_col_val(r, "成交量", "volume"),
+                amount=_col_val(r, "成交额", "amount"),
+                high=_col_val(r, "最高", "high"),
+                low=_col_val(r, "最低", "low"),
+                open_price=_col_val(r, "今开", "open"),
+                prev_close=_col_val(r, "昨收", "pre_close", "settlement"),
             )
         except Exception as e:
             logger.warning("实时行情获取失败(%s): %s", code, e)
@@ -397,6 +422,30 @@ class AKShareClient:
             return cached[:count]
         return []
 
+    # ── 市场广度统计（涨跌家数 + 涨跌停）──
+
+    async def get_market_breadth(self) -> dict:
+        """从全量行情统计涨跌家数和涨跌停"""
+        try:
+            df = await _get_spot_df()
+            chg_col = _col(df, "涨跌幅", "pct_chg", "changepercent")
+            if not chg_col:
+                return {"rise": 0, "fall": 0, "limit_up": 0, "limit_down": 0}
+
+            df[chg_col] = df[chg_col].astype(float)
+            rise = int((df[chg_col] > 0).sum())
+            fall = int((df[chg_col] < 0).sum())
+            limit_up = int((df[chg_col] >= 9.9).sum())
+            limit_down = int((df[chg_col] <= -9.9).sum())
+
+            return {
+                "rise": rise, "fall": fall,
+                "limit_up": limit_up, "limit_down": limit_down,
+            }
+        except Exception as e:
+            logger.warning("市场广度统计失败: %s", e)
+            return {"rise": 0, "fall": 0, "limit_up": 0, "limit_down": 0}
+
     # ── 板块资金流向（修正列名）──
 
     async def get_sector_fund_flow(self, count: int = 10) -> list[dict]:
@@ -420,6 +469,115 @@ class AKShareClient:
         except Exception as e:
             logger.warning("板块资金流向接口不可用: %s", e)
             return []
+
+    # ── 期货行情（新浪源）──
+
+    # 期货品种别名 → 合约代码前缀
+    _FUTURES_ALIAS: dict[str, tuple[str, str]] = {
+        "欧线": ("EC0", "集运指数(欧线)"), "集运": ("EC0", "集运指数(欧线)"),
+        "欧线集运": ("EC0", "集运指数(欧线)"), "集运指数": ("EC0", "集运指数(欧线)"),
+        "螺纹": ("RB0", "螺纹钢"), "螺纹钢": ("RB0", "螺纹钢"),
+        "铁矿": ("I0", "铁矿石"), "铁矿石": ("I0", "铁矿石"),
+        "原油": ("SC0", "原油"), "黄金": ("AU0", "黄金"),
+        "白银": ("AG0", "白银"), "铜": ("CU0", "铜"),
+        "豆粕": ("M0", "豆粕"), "棕榈油": ("P0", "棕榈油"),
+        "焦煤": ("JM0", "焦煤"), "焦炭": ("J0", "焦炭"),
+        "甲醇": ("MA0", "甲醇"), "PTA": ("TA0", "PTA"),
+        "纯碱": ("SA0", "纯碱"), "玻璃": ("FG0", "玻璃"),
+        "沪深300": ("IF0", "沪深300股指"), "上证50": ("IH0", "上证50股指"),
+    }
+
+    def resolve_futures_code(self, text: str) -> tuple[str, str] | None:
+        """从文本识别期货品种，返回 (合约代码, 品种名) 或 None"""
+        for alias, (code, name) in self._FUTURES_ALIAS.items():
+            if alias in text:
+                return code, name
+        # 尝试直接匹配合约代码格式（如 EC2408, RB2410, EC0）
+        import re
+        m = re.search(r"\b([A-Za-z]{1,3}\d{0,4})\b", text)
+        if m:
+            raw = m.group(1).upper()
+            # 检查是否是已知品种前缀
+            for _, (code, name) in self._FUTURES_ALIAS.items():
+                prefix = re.match(r"[A-Z]+", code).group()
+                if raw.startswith(prefix):
+                    return raw if len(raw) > len(prefix) else code, name
+        return None
+
+    async def get_futures_quote(self, symbol: str, name: str = "") -> StockQuote | None:
+        """获取期货实时行情"""
+        try:
+            df = await _run_with_retry(
+                ak.futures_zh_spot, symbol=symbol, market="CF", adjust="0",
+                group="futures",
+            )
+            if df is None or df.empty:
+                return None
+            r = df.iloc[0]
+            current = float(r.get("current_price", 0))
+            last_close = float(r.get("last_close", current))
+            change_pct = round((current - last_close) / last_close * 100, 2) if last_close else 0
+            return StockQuote(
+                code=symbol, name=name or str(r.get("symbol", symbol)),
+                price=current, change_pct=change_pct,
+                volume=float(r.get("buy_vol", 0)) + float(r.get("sell_vol", 0)),
+                amount=0, high=float(r.get("high", 0)), low=float(r.get("low", 0)),
+                open_price=float(r.get("open", 0)), prev_close=last_close,
+            )
+        except Exception as e:
+            logger.warning("期货实时行情 %s 失败: %s", symbol, e)
+            return await self._futures_quote_from_daily(symbol, name)
+
+    async def get_futures_history(self, symbol: str, days: int = 60) -> list[StockDailyBar]:
+        """获取期货日K（新浪源，连续合约用品种代码+0如EC0）"""
+        try:
+            df = await _run_with_retry(
+                ak.futures_zh_daily_sina, symbol=symbol, group="futures_hist",
+            )
+        except Exception as e:
+            logger.error("期货日K %s 失败: %s", symbol, e)
+            return []
+
+        if df is None or df.empty:
+            return []
+
+        bars = []
+        prev_close = None
+        for _, row in df.tail(days).iterrows():
+            trade_date = row["date"]
+            if isinstance(trade_date, str):
+                trade_date = datetime.strptime(trade_date, "%Y-%m-%d").date()
+            elif isinstance(trade_date, datetime):
+                trade_date = trade_date.date()
+
+            close = float(row["close"])
+            change_pct = 0.0
+            if prev_close and prev_close != 0:
+                change_pct = round((close - prev_close) / prev_close * 100, 2)
+            prev_close = close
+
+            bars.append(StockDailyBar(
+                code=symbol, trade_date=trade_date,
+                open=float(row["open"]), high=float(row["high"]),
+                low=float(row["low"]), close=close,
+                volume=float(row.get("volume", 0)), amount=0,
+                change_pct=change_pct,
+            ))
+        return bars
+
+    async def _futures_quote_from_daily(self, symbol: str, name: str = "") -> StockQuote | None:
+        bars = await self.get_futures_history(symbol, days=2)
+        if not bars:
+            return None
+        latest = bars[-1]
+        prev_close = bars[-2].close if len(bars) >= 2 else latest.close
+        return StockQuote(
+            code=symbol, name=name or symbol,
+            price=latest.close, change_pct=latest.change_pct,
+            volume=latest.volume, amount=0,
+            high=latest.high, low=latest.low,
+            open_price=latest.open, prev_close=prev_close,
+        )
 
     # ── 内部降级 ──
 

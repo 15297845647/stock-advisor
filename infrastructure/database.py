@@ -73,6 +73,25 @@ CREATE TABLE IF NOT EXISTS user_positions (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS backtest_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_code TEXT NOT NULL,
+    report_date DATE NOT NULL,
+    action TEXT NOT NULL,
+    confidence REAL DEFAULT 0,
+    target_price REAL DEFAULT 0,
+    stop_loss REAL DEFAULT 0,
+    entry_price REAL NOT NULL,
+    exit_price REAL,
+    actual_return_pct REAL,
+    direction_correct INTEGER,
+    hit_target INTEGER DEFAULT 0,
+    hit_stop_loss INTEGER DEFAULT 0,
+    eval_window_days INTEGER DEFAULT 5,
+    evaluated_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS bots (
     name TEXT PRIMARY KEY,
     user_id TEXT NOT NULL UNIQUE,

@@ -77,8 +77,23 @@ class ChatService:
             case Intent.MARKET_OVERVIEW:
                 return await self.analysis.get_market_overview()
 
+            case Intent.BACKTEST:
+                from application.backtest_service import BacktestService
+                return await BacktestService().run_backtest(days=30)
+
             case Intent.RECOMMEND:
                 return await self._handle_recommend(ctx)
+
+            case Intent.SCREEN_STOCKS:
+                return await self._handle_screen(parsed.raw_text)
+
+            case Intent.ANALYZE_STOCK_DEEP:
+                if not parsed.stock_code:
+                    return "请提供股票代码，如「深度分析 600519」。"
+                return await self.analysis.analyze_stock_deep(parsed.stock_code)
+
+            case Intent.ANALYZE_FUTURES:
+                return await self.analysis.analyze_futures(parsed.raw_text)
 
             case Intent.CLOSE_POSITION:
                 return await self.position.close_position(
@@ -178,6 +193,70 @@ class ChatService:
             return await self._handle_chat_with_position_detect(
                 ctx.profile.wechat_id, ctx, message)
         return await self.analysis.analyze_stock(stock_code)
+
+    async def _handle_screen(self, text: str) -> str:
+        """条件筛选 — 从预设策略或涨幅榜里跑筛选"""
+        from domain.stock_screener import PRESET_STRATEGIES, get_preset_names
+        from domain.stock_analyzer import analyze_technical
+
+        # 匹配预设策略
+        matched_strategy = None
+        for name in get_preset_names():
+            if name in text:
+                matched_strategy = name
+                break
+
+        if not matched_strategy:
+            presets = "、".join(get_preset_names())
+            return f"支持以下筛选策略：{presets}\n\n示例：「金叉选股」「超跌反弹」「强势突破」「均线多头」"
+
+        strategy = PRESET_STRATEGIES[matched_strategy]
+        conditions = strategy["conditions"]
+
+        # 从涨幅榜取样本股
+        rank_data = await self.akshare.get_stock_rank_list(count=50)
+        if not rank_data:
+            return "暂时无法获取行情数据。"
+
+        from domain.stock_screener import evaluate_all
+
+        results = []
+        for stock in rank_data[:30]:
+            code = stock["code"]
+            bars = await self.akshare.get_stock_history(code, days=30)
+            if len(bars) < 2:
+                continue
+
+            tech = analyze_technical(bars)
+            if not tech:
+                continue
+
+            indicators = {
+                "ma5": tech.ma5, "ma10": tech.ma10, "ma20": tech.ma20,
+                "macd_hist": tech.macd_hist, "rsi_14": tech.rsi_14,
+                "change_pct": stock["change_pct"],
+                "price_above_ma20": 1 if bars[-1].close > tech.ma20 else 0,
+                "volume_ratio": bars[-1].volume / max(
+                    sum(b.volume for b in bars[-6:-1]) / 5, 1
+                ) if len(bars) >= 6 else 1,
+            }
+            prev_indicators = {
+                "ma5": tech.ma5, "ma10": tech.ma10, "ma20": tech.ma20,
+            }
+
+            if evaluate_all(conditions, indicators, prev_indicators):
+                results.append(
+                    f"  {stock['name']}（{code}）"
+                    f"  价格{stock['price']}  涨跌{stock['change_pct']:+.2f}%"
+                    f"  RSI={tech.rsi_14:.0f}"
+                )
+
+        if not results:
+            return f"「{matched_strategy}」未筛到符合条件的股票，可能当前市场环境不适合该策略。"
+
+        header = f"📋 {matched_strategy}（{strategy['name']}）筛选结果：\n"
+        footer = "\n\n回复股票代码可查看详细分析。\n以上仅供参考，不构成投资建议。"
+        return header + "\n".join(results[:10]) + footer
 
     async def _handle_recommend(self, ctx: UserContext) -> str:
         rank_data = await self.akshare.get_stock_rank_list(count=20)

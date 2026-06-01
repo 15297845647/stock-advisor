@@ -7,11 +7,15 @@ from enum import Enum, auto
 
 class Intent(Enum):
     ANALYZE_STOCK = auto()    # 分析某只股票
+    ANALYZE_STOCK_DEEP = auto() # 深度分析（多空辩论）
+    ANALYZE_FUTURES = auto()  # 分析期货品种
     SUBSCRIBE = auto()        # 关注/订阅
     UNSUBSCRIBE = auto()      # 取消关注
     SHOW_WATCHLIST = auto()   # 查看关注列表
     MARKET_OVERVIEW = auto()  # 大盘概览
     RECOMMEND = auto()        # 推荐/选股
+    SCREEN_STOCKS = auto()    # 条件筛选
+    BACKTEST = auto()         # 回测历史建议
     CLOSE_POSITION = auto()   # 卖出/平仓
     SHOW_POSITIONS = auto()   # 查看持仓
     CONFIRM = auto()          # 确认操作
@@ -53,7 +57,18 @@ _UNSUBSCRIBE_KW = {"取消关注", "取关", "删除", "移除", "不看了"}
 _WATCHLIST_KW = {"关注列表", "自选股", "我的关注", "我关注了什么", "看看列表"}
 _MARKET_KW = {"大盘", "上证", "沪深", "市场", "指数", "今天行情"}
 _RECOMMEND_KW = {"推荐", "选股", "买什么", "热点股", "龙头", "强势股", "牛股", "推荐几只", "有什么好股"}
+_SCREEN_KW = {"筛选", "选出", "筛股", "金叉选股", "超跌反弹", "强势突破", "均线多头", "条件选股"}
+_BACKTEST_KW = {"回测", "准确率", "历史验证", "建议准不准", "胜率", "模型效果"}
 _ANALYZE_KW = {"分析", "看看", "怎么样", "走势", "技术面", "帮我看", "诊断", "研判"}
+_DEEP_ANALYZE_KW = {"深度分析", "详细分析", "深入分析", "全面分析", "多空分析", "辩论分析"}
+_FUTURES_KW = {"期货", "合约", "主力合约", "连续合约"}
+_FUTURES_NAMES = {
+    "欧线", "集运", "欧线集运", "集运指数",
+    "螺纹", "螺纹钢", "铁矿", "铁矿石",
+    "原油", "黄金", "白银", "铜",
+    "豆粕", "棕榈油", "焦煤", "焦炭",
+    "甲醇", "PTA", "纯碱", "玻璃",
+}
 _CLOSE_POSITION_KW = {"卖出", "平仓", "清仓", "出了", "卖了", "减仓", "止盈", "止损"}
 _SHOW_POSITION_KW = {"持仓", "我的仓位", "仓位", "持有什么", "我买了什么", "看看持仓", "当前持仓"}
 _CONFIRM_KW = {"确认", "确定", "是的", "对的", "没错", "录入", "保存", "ok", "OK", "好的"}
@@ -95,6 +110,14 @@ def parse_intent(text: str) -> ParsedIntent:
     if any(kw in text_lower for kw in _MARKET_KW):
         return ParsedIntent(Intent.MARKET_OVERVIEW, raw_text=text)
 
+    # 回测
+    if any(kw in text_lower for kw in _BACKTEST_KW):
+        return ParsedIntent(Intent.BACKTEST, raw_text=text)
+
+    # 条件筛选（优先于普通推荐）
+    if any(kw in text_lower for kw in _SCREEN_KW):
+        return ParsedIntent(Intent.SCREEN_STOCKS, raw_text=text)
+
     # 推荐选股
     if any(kw in text_lower for kw in _RECOMMEND_KW):
         return ParsedIntent(Intent.RECOMMEND, raw_text=text)
@@ -116,13 +139,23 @@ def parse_intent(text: str) -> ParsedIntent:
         price = _extract_price(text_lower)
         return ParsedIntent(Intent.CLOSE_POSITION, stock_code=code, raw_text=text, price=price)
 
-    # 分析个股 — 必须含分析关键词，纯代码不算（可能是在描述持仓等其他语境）
-    has_analyze_kw = any(kw in text_lower for kw in _ANALYZE_KW)
+    # 期货分析
+    is_futures = any(kw in text_lower for kw in _FUTURES_KW)
+    has_futures_name = any(fn in text_lower for fn in _FUTURES_NAMES)
+    if is_futures or has_futures_name:
+        return ParsedIntent(Intent.ANALYZE_FUTURES, raw_text=text)
+
+    # 深度分析（多空辩论）
+    has_deep_kw = any(kw in text_lower for kw in _DEEP_ANALYZE_KW)
     code = _extract_code(text_lower)
+    if has_deep_kw:
+        return ParsedIntent(Intent.ANALYZE_STOCK_DEEP, stock_code=code, raw_text=text)
+
+    # 普通分析
+    has_analyze_kw = any(kw in text_lower for kw in _ANALYZE_KW)
     if has_analyze_kw:
         return ParsedIntent(Intent.ANALYZE_STOCK, stock_code=code, raw_text=text)
     if code and len(text_lower) <= 10:
-        # 短消息只含代码 → 视为分析请求
         return ParsedIntent(Intent.ANALYZE_STOCK, stock_code=code, raw_text=text)
 
     # 兜底：自由对话
