@@ -114,7 +114,10 @@ async def _get_spot_df():
         if _spot_cache_data is not None:
             logger.warning("行情源均不可用，使用过期缓存")
             return _spot_cache_data
-        raise RuntimeError("所有实时行情源均不可用")
+
+        import pandas as pd
+        logger.error("所有实时行情源均不可用，返回空数据")
+        return pd.DataFrame()
 
 
 # ── 文件缓存 ──

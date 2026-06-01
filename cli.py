@@ -64,6 +64,56 @@ def cmd_push(args):
     asyncio.run(_run())
 
 
+def cmd_test_data(args):
+    """测试 AKShare 数据拉取（排查数据问题）"""
+    from infrastructure.akshare_client import AKShareClient
+
+    async def _run():
+        client = AKShareClient()
+        code = args.code
+
+        print(f"=== 测试 {code} 数据拉取 ===\n")
+
+        print("[1] 实时行情...")
+        q = await client.get_realtime_quote(code)
+        if q:
+            print(f"  ✅ {q.name} 价格:{q.price} 涨跌:{q.change_pct:+.2f}%")
+        else:
+            print("  ❌ 无数据")
+
+        print("\n[2] 日K...")
+        bars = await client.get_stock_history(code, days=5)
+        print(f"  返回 {len(bars)} 条")
+        for b in bars[-3:]:
+            print(f"  {b.trade_date} 收:{b.close} 涨跌:{b.change_pct:+.2f}%")
+        if not bars:
+            print("  ❌ 无数据")
+
+        print("\n[3] 资金流...")
+        flows = await client.get_fund_flow(code)
+        print(f"  返回 {len(flows)} 条")
+        if not flows:
+            print("  ❌ 无数据")
+
+        print("\n[4] 新闻...")
+        news = await client.get_stock_news(code, limit=3)
+        print(f"  返回 {len(news)} 条")
+        for n in news[:2]:
+            print(f"  {n.title[:40]}")
+        if not news:
+            print("  ❌ 无数据")
+
+        print("\n[5] 全量行情缓存...")
+        try:
+            from infrastructure.akshare_client import _get_spot_df
+            df = await _get_spot_df()
+            print(f"  ✅ {len(df)} 条")
+        except Exception as e:
+            print(f"  ❌ {e}")
+
+    asyncio.run(_run())
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="stock-advisor",
@@ -88,6 +138,10 @@ def main():
     # push
     sub.add_parser("push", help="手动触发每日推送")
 
+    # test-data
+    p_test = sub.add_parser("test-data", help="测试数据拉取（排查问题）")
+    p_test.add_argument("code", help="股票代码，如 601360")
+
     args = parser.parse_args()
 
     if not args.command:
@@ -100,6 +154,7 @@ def main():
         "init-db": cmd_init_db,
         "analyze": cmd_analyze,
         "push": cmd_push,
+        "test-data": cmd_test_data,
     }
     cmds[args.command](args)
 

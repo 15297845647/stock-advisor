@@ -38,28 +38,43 @@ class AnalysisService:
 
         # 1. 实时行情
         quote = await self.akshare.get_realtime_quote(stock_code)
-        if not quote:
-            return f"未找到股票 {stock_code} 的行情数据，请确认代码是否正确。"
+        logger.info("[%s] 实时行情: %s", stock_code, "OK" if quote else "FAIL")
 
-        # 2. 日K + 缓存
+        # 2. 日K
         bars = await self.akshare.get_stock_history(stock_code, days=60)
+        logger.info("[%s] 日K: %d 条", stock_code, len(bars))
         if bars:
             await self.stock_repo.save_daily_bars(bars)
 
         # 3. 技术指标
-        tech = analyze_technical(bars)
-        if not tech:
-            return f"{quote.name}({stock_code}) 数据不足，无法完成技术分析。"
+        tech = analyze_technical(bars) if bars else None
+        logger.info("[%s] 技术指标: %s", stock_code, "OK" if tech else "FAIL")
 
         # 4. 资金流向
         fund_flows = await self.akshare.get_fund_flow(stock_code)
+        logger.info("[%s] 资金流: %d 条", stock_code, len(fund_flows))
 
-        # 5. 新闻/公告
+        # 5. 新闻
         news = await self.akshare.get_stock_news(stock_code, limit=20)
+        logger.info("[%s] 新闻: %d 条", stock_code, len(news))
 
-        # 6. 构造 prompt → MiniMax
-        analysis_prompt = build_analysis_prompt(quote, tech, fund_flows, bars, news)
+        # 6. 构造 prompt（数据不全也能分析，降级为纯 LLM）
         system = build_system_prompt()
+        if tech and quote:
+            analysis_prompt = build_analysis_prompt(quote, tech, fund_flows, bars, news)
+        elif quote:
+            # 有行情无技术指标 → 简化 prompt
+            analysis_prompt = (
+                f"请分析股票 {quote.name}({stock_code})，"
+                f"当前价格 {quote.price}，涨跌幅 {quote.change_pct:+.2f}%。"
+                f"日K数据暂时无法获取，请基于已知信息给出分析。"
+            )
+        else:
+            # 行情也拉不到 → 纯 LLM
+            analysis_prompt = (
+                f"请分析股票代码 {stock_code}，"
+                f"行情数据暂时无法获取，请基于你的知识给出该股票的基本面和近期走势分析。"
+            )
 
         raw_response = await self.minimax.chat(
             system_prompt=system,
@@ -69,11 +84,13 @@ class AnalysisService:
         # 7. 解析结构化决策 + 规则层校准
         report_text, decision = extract_decision(raw_response)
 
-        if decision:
+        if decision and tech and quote:
             result = stabilize_decision(decision, quote.price, tech, fund_flows)
             if result.adjusted:
                 report_text += f"\n\n⚠️ 决策校准：{result.reason}"
             report_text += format_decision(result.decision)
+        elif decision:
+            report_text += format_decision(decision)
 
         # 9. 存储报告
         report = AnalysisReport(
