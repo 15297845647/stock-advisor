@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "stock_advisor.db"))
 
 # AKShare 限频：每次请求间隔秒数
-AKSHARE_REQUEST_INTERVAL = float(os.getenv("AKSHARE_REQUEST_INTERVAL", "2.5"))
+AKSHARE_REQUEST_INTERVAL = float(os.getenv("AKSHARE_REQUEST_INTERVAL", "1.0"))
 
 # 对话历史保留轮数（每轮=user+assistant）
 CHAT_HISTORY_ROUNDS = int(os.getenv("CHAT_HISTORY_ROUNDS", "5"))

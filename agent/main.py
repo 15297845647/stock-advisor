@@ -14,10 +14,16 @@ from application.chat_service import ChatService  # noqa: E402
 from infrastructure.database import init_db  # noqa: E402
 from scheduler.daily_push import setup_scheduler  # noqa: E402
 
+_log_dir = Path(__file__).resolve().parent.parent / "data" / "logs"
+_log_dir.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    stream=sys.stderr,
+    handlers=[
+        logging.StreamHandler(sys.stderr),
+        logging.FileHandler(_log_dir / "agent.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger("stock-advisor")
 
