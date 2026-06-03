@@ -52,6 +52,46 @@ async def _throttle(group: str = "default"):
         _last_call_times[group] = time.monotonic()
 
 
+# ── 东财熔断器（云服务器反爬时自动跳过）──
+
+class _CircuitBreaker:
+    """简易熔断器：连续失败 N 次后，cooldown 秒内自动跳过"""
+    def __init__(self, threshold: int = 3, cooldown: int = 300):
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self._failures = 0
+        self._last_fail_time: float = 0
+
+    def record_failure(self):
+        self._failures += 1
+        self._last_fail_time = time.monotonic()
+
+    def record_success(self):
+        self._failures = 0
+
+    def is_open(self) -> bool:
+        if self._failures < self.threshold:
+            return False
+        elapsed = time.monotonic() - self._last_fail_time
+        if elapsed > self.cooldown:
+            self._failures = 0
+            return False
+        return True
+
+
+_eastmoney_breaker = _CircuitBreaker(threshold=3, cooldown=300)
+
+_EASTMONEY_FUNCS = {
+    "stock_zh_a_spot_em", "stock_zh_a_hist", "stock_individual_fund_flow",
+    "stock_sector_fund_flow_rank", "index_zh_a_hist", "stock_news_em",
+    "stock_individual_notice_report", "stock_individual_info_em",
+}
+
+
+def _is_eastmoney_func(func) -> bool:
+    return getattr(func, "__name__", "") in _EASTMONEY_FUNCS
+
+
 async def _run_sync(func, *args, group: str = "default", **kwargs):
     await _throttle(group)
     loop = asyncio.get_event_loop()
@@ -59,10 +99,19 @@ async def _run_sync(func, *args, group: str = "default", **kwargs):
 
 
 async def _run_with_retry(func, *args, group: str = "default", retries: int = 2, **kwargs):
+    # 东财熔断：连续失败 3 次后 5 分钟内自动跳过
+    if _eastmoney_breaker.is_open() and _is_eastmoney_func(func):
+        raise ConnectionError(f"东财熔断中，跳过 {func.__name__}")
+
     for attempt in range(retries + 1):
         try:
-            return await _run_sync(func, *args, group=group, **kwargs)
+            result = await _run_sync(func, *args, group=group, **kwargs)
+            if _is_eastmoney_func(func):
+                _eastmoney_breaker.record_success()
+            return result
         except Exception as e:
+            if _is_eastmoney_func(func):
+                _eastmoney_breaker.record_failure()
             if attempt < retries:
                 wait = (attempt + 1) * 2
                 logger.warning("%s 失败(第%d次)，%ds后重试: %s", func.__name__, attempt + 1, wait, e)
@@ -340,18 +389,22 @@ class AKShareClient:
         except Exception as e:
             logger.warning("获取 %s 新闻失败: %s", code, e)
 
-        # 公告
+        # 个股公告（stock_individual_notice_report，需 security 参数）
         try:
-            df = await _run_with_retry(ak.stock_notice_report, symbol=code, group="news")
-            if df is not None and not df.empty:
-                for _, row in df.head(10).iterrows():
-                    news_list.append(StockNews(
-                        title=str(row.get("公告标题", row.get("title", ""))),
-                        source="公司公告",
-                        time=str(row.get("公告日期", row.get("date", ""))),
-                        url=str(row.get("公告链接", row.get("url", ""))),
-                        news_type="announcement",
-                    ))
+            notice_func = getattr(ak, "stock_individual_notice_report", None)
+            if notice_func:
+                df = await _run_with_retry(
+                    notice_func, security=code, symbol="全部", group="news",
+                )
+                if df is not None and not df.empty:
+                    for _, row in df.head(10).iterrows():
+                        news_list.append(StockNews(
+                            title=str(row.get("公告标题", row.get("title", ""))),
+                            source="公司公告",
+                            time=str(row.get("公告日期", row.get("date", ""))),
+                            url=str(row.get("公告链接", row.get("url", ""))),
+                            news_type="announcement",
+                        ))
         except Exception as e:
             logger.warning("获取 %s 公告失败（非关键）: %s", code, e)
 
@@ -365,36 +418,57 @@ class AKShareClient:
         "399006": "创业板指",
     }
 
+    _INDEX_SYMBOL_MAP = {
+        "000001": "sh000001", "399001": "sz399001", "399006": "sz399006",
+    }
+
     async def get_market_index(self, index_code: str = "000001") -> StockQuote | None:
+        """指数行情：东财 → 新浪 fallback"""
         end_date = date.today().strftime("%Y%m%d")
         start_date = (date.today() - timedelta(days=10)).strftime("%Y%m%d")
+        name = self._INDEX_NAME_MAP.get(index_code, index_code)
+
+        # 优先东财（含涨跌幅）
         try:
             df = await _run_with_retry(
-                ak.index_zh_a_hist,
-                symbol=index_code,
-                period="daily",
-                start_date=start_date,
-                end_date=end_date,
-                group="index",
+                ak.index_zh_a_hist, symbol=index_code, period="daily",
+                start_date=start_date, end_date=end_date, group="index",
             )
-            if df is None or df.empty:
-                return None
-            r = df.iloc[-1]
-            return StockQuote(
-                code=index_code,
-                name=self._INDEX_NAME_MAP.get(index_code, index_code),
-                price=float(r["收盘"]),
-                change_pct=float(r.get("涨跌幅", 0)),
-                volume=float(r.get("成交量", 0)),
-                amount=float(r.get("成交额", 0)),
-                high=float(r["最高"]),
-                low=float(r["最低"]),
-                open_price=float(r["开盘"]),
-                prev_close=float(r["收盘"]) - float(r.get("涨跌额", 0)),
-            )
+            if df is not None and not df.empty:
+                r = df.iloc[-1]
+                return StockQuote(
+                    code=index_code, name=name,
+                    price=float(r["收盘"]), change_pct=float(r.get("涨跌幅", 0)),
+                    volume=float(r.get("成交量", 0)), amount=float(r.get("成交额", 0)),
+                    high=float(r["最高"]), low=float(r["最低"]),
+                    open_price=float(r["开盘"]),
+                    prev_close=float(r["收盘"]) - float(r.get("涨跌额", 0)),
+                )
         except Exception as e:
-            logger.error("获取指数 %s 失败: %s", index_code, e)
-            return None
+            logger.warning("东财指数 %s 失败: %s，尝试新浪", index_code, e)
+
+        # 降级新浪
+        symbol = self._INDEX_SYMBOL_MAP.get(index_code, f"sh{index_code}")
+        try:
+            df = await _run_with_retry(
+                ak.stock_zh_index_daily, symbol=symbol, group="index_sina",
+            )
+            if df is not None and not df.empty:
+                r = df.iloc[-1]
+                prev = df.iloc[-2] if len(df) >= 2 else r
+                prev_close = float(prev["close"])
+                close = float(r["close"])
+                pct = round((close - prev_close) / prev_close * 100, 2) if prev_close else 0
+                return StockQuote(
+                    code=index_code, name=name, price=close, change_pct=pct,
+                    volume=float(r.get("volume", 0)), amount=0,
+                    high=float(r["high"]), low=float(r["low"]),
+                    open_price=float(r["open"]), prev_close=prev_close,
+                )
+        except Exception as e:
+            logger.error("新浪指数 %s 也失败: %s", index_code, e)
+
+        return None
 
     # ── 涨幅榜（复用全量缓存 + 文件降级）──
 
@@ -472,6 +546,117 @@ class AKShareClient:
         except Exception as e:
             logger.warning("板块资金流向接口不可用: %s", e)
             return []
+
+    # ── 个股基本面（东财 + 新浪财务摘要）──
+
+    async def get_fundamentals(self, code: str) -> 'StockFundamental | None':
+        """获取个股基本面数据：stock_individual_info_em + stock_financial_abstract"""
+        from domain.models.stock import StockFundamental
+
+        info = {}
+
+        # 1. 东财个股信息（总市值/流通市值/行业）
+        try:
+            df = await _run_with_retry(ak.stock_individual_info_em, symbol=code, group="info")
+            if df is not None and not df.empty:
+                for _, row in df.iterrows():
+                    item = str(row.get("item", ""))
+                    value = row.get("value", "")
+                    if item == "总市值":
+                        info["total_market_cap"] = float(value) if value else 0
+                    elif item == "流通市值":
+                        info["circulating_cap"] = float(value) if value else 0
+                    elif item == "行业":
+                        info["industry"] = str(value)
+                    elif item == "股票简称":
+                        info["name"] = str(value)
+        except Exception as e:
+            logger.warning("东财个股信息 %s 失败: %s", code, e)
+
+        # 2. 新浪财务摘要（PE/PB/ROE/营收/净利润）
+        try:
+            df = await _run_with_retry(ak.stock_financial_abstract, symbol=code, group="finance")
+            if df is not None and not df.empty:
+                latest = df.iloc[0]
+                info["report_period"] = str(latest.get("报告期", ""))
+                info["revenue"] = float(latest.get("营业收入", 0) or 0)
+                info["revenue_growth"] = float(latest.get("营业收入同比增长", 0) or 0)
+                info["net_profit"] = float(latest.get("净利润", 0) or 0)
+                info["profit_growth"] = float(latest.get("净利润同比增长", 0) or 0)
+                info["eps"] = float(latest.get("每股收益", 0) or 0)
+                info["roe"] = float(latest.get("净资产收益率", 0) or 0)
+                info["bvps"] = float(latest.get("每股净资产", 0) or 0)
+        except Exception as e:
+            logger.warning("财务摘要 %s 失败（非关键）: %s", code, e)
+
+        # 3. 从实时行情补 PE/PB
+        try:
+            quote = await self.get_realtime_quote(code)
+            if quote and info.get("eps") and info["eps"] != 0:
+                info["pe_ratio"] = round(quote.price / info["eps"], 2)
+            if quote and info.get("bvps") and info["bvps"] != 0:
+                info["pb_ratio"] = round(quote.price / info["bvps"], 2)
+        except Exception:
+            pass
+
+        if not info:
+            return None
+
+        return StockFundamental(
+            code=code,
+            name=info.get("name", code),
+            total_market_cap=info.get("total_market_cap", 0),
+            circulating_cap=info.get("circulating_cap", 0),
+            industry=info.get("industry", ""),
+            pe_ratio=info.get("pe_ratio", 0),
+            pb_ratio=info.get("pb_ratio", 0),
+            roe=info.get("roe", 0),
+            revenue=info.get("revenue", 0),
+            revenue_growth=info.get("revenue_growth", 0),
+            net_profit=info.get("net_profit", 0),
+            profit_growth=info.get("profit_growth", 0),
+            eps=info.get("eps", 0),
+            bvps=info.get("bvps", 0),
+            debt_ratio=info.get("debt_ratio", 0),
+            report_period=info.get("report_period", ""),
+        )
+
+    # ── 数据一致性验证 ──
+
+    async def verify_quote_consistency(self, code: str) -> dict:
+        """多源交叉验证行情数据"""
+        results = {}
+
+        # 东财源
+        try:
+            df = await _run_with_retry(ak.stock_zh_a_spot_em, group="spot")
+            row = df[df["代码"] == code]
+            if not row.empty:
+                results["eastmoney"] = float(row.iloc[0]["最新价"])
+        except Exception:
+            pass
+
+        # 腾讯日K最新
+        try:
+            bars = await self._hist_from_tencent(code, date.today() - timedelta(days=5), date.today(), 1)
+            if bars:
+                results["tencent"] = bars[-1].close
+        except Exception:
+            pass
+
+        # 比较
+        prices = list(results.values())
+        consistent = True
+        max_diff_pct = 0
+        if len(prices) >= 2:
+            max_diff_pct = abs(prices[0] - prices[1]) / prices[0] * 100
+            consistent = max_diff_pct < 2  # 2% tolerance
+
+        return {
+            "sources": results,
+            "consistent": consistent,
+            "max_diff_pct": round(max_diff_pct, 2),
+        }
 
     # ── 期货行情（新浪源）──
 

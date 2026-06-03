@@ -111,6 +111,15 @@ def cmd_test_data(args):
         except Exception as e:
             print(f"  ❌ {e}")
 
+        print("\n[6] 数据一致性校验...")
+        consistency = await client.verify_quote_consistency(code)
+        if consistency["consistent"]:
+            print(f"  ✅ 多源一致 (差异 {consistency['max_diff_pct']}%)")
+        else:
+            print(f"  ⚠️ 数据不一致 (差异 {consistency['max_diff_pct']}%)")
+        for src, price in consistency["sources"].items():
+            print(f"    {src}: {price}")
+
     asyncio.run(_run())
 
 

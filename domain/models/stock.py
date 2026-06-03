@@ -64,3 +64,24 @@ class StockDecision:
     risk_score: int        # 风险评分 1-10
     reasoning: str         # 核心理由
     key_points: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StockFundamental:
+    """个股基本面数据"""
+    code: str
+    name: str
+    total_market_cap: float = 0    # 总市值（元）
+    circulating_cap: float = 0     # 流通市值
+    industry: str = ""             # 行业
+    pe_ratio: float = 0            # 市盈率
+    pb_ratio: float = 0            # 市净率
+    roe: float = 0                 # 净资产收益率(%)
+    revenue: float = 0             # 营业收入（元）
+    revenue_growth: float = 0      # 营收同比增长(%)
+    net_profit: float = 0          # 净利润（元）
+    profit_growth: float = 0       # 净利润同比增长(%)
+    eps: float = 0                 # 每股收益
+    bvps: float = 0                # 每股净资产
+    debt_ratio: float = 0          # 资产负债率(%)
+    report_period: str = ""        # 最新报告期

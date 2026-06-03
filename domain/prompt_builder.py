@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from domain.models.stock import FundFlow, StockDailyBar, StockNews, StockQuote
+from domain.models.stock import FundFlow, StockDailyBar, StockFundamental, StockNews, StockQuote
 from domain.models.user_context import UserContext
 from domain.stock_analyzer import TechnicalSnapshot
 
@@ -23,8 +23,9 @@ def build_analysis_prompt(
     fund_flows: list[FundFlow],
     bars: list[StockDailyBar],
     news: list[StockNews] | None = None,
+    fundamentals: StockFundamental | None = None,
 ) -> str:
-    """构造综合分析 prompt（技术面 + 资金面 + 消息面）"""
+    """构造综合分析 prompt（技术面 + 基本面 + 资金面 + 消息面）"""
     template = _load_template("analysis.txt")
 
     ma60_line = f"MA60={tech.ma60}" if tech.ma60 else "MA60=数据不足"
@@ -45,6 +46,31 @@ def build_analysis_prompt(
             f"收{b.close} 量{b.volume:.0f} 涨跌{b.change_pct:+.2f}%"
         )
     kline_summary = "\n".join(kline_lines)
+
+    # 基本面文本
+    fund_lines = []
+    if fundamentals:
+        if fundamentals.industry:
+            fund_lines.append(f"  行业：{fundamentals.industry}")
+        if fundamentals.total_market_cap:
+            fund_lines.append(f"  总市值：{fundamentals.total_market_cap/1e8:.1f}亿")
+        if fundamentals.pe_ratio:
+            fund_lines.append(f"  PE(市盈率)：{fundamentals.pe_ratio:.1f}")
+        if fundamentals.pb_ratio:
+            fund_lines.append(f"  PB(市净率)：{fundamentals.pb_ratio:.2f}")
+        if fundamentals.roe:
+            fund_lines.append(f"  ROE(净资产收益率)：{fundamentals.roe:.1f}%")
+        if fundamentals.revenue:
+            fund_lines.append(f"  营收：{fundamentals.revenue/1e8:.1f}亿 同比{fundamentals.revenue_growth:+.1f}%")
+        if fundamentals.net_profit:
+            fund_lines.append(f"  净利润：{fundamentals.net_profit/1e8:.1f}亿 同比{fundamentals.profit_growth:+.1f}%")
+        if fundamentals.eps:
+            fund_lines.append(f"  每股收益：{fundamentals.eps:.2f}元")
+        if fundamentals.debt_ratio:
+            fund_lines.append(f"  资产负债率：{fundamentals.debt_ratio:.1f}%")
+        if fundamentals.report_period:
+            fund_lines.append(f"  最新报告期：{fundamentals.report_period}")
+    fundamental_text = "\n".join(fund_lines) if fund_lines else "暂无基本面数据"
 
     # 新闻/公告文本
     news_lines = []
@@ -67,6 +93,7 @@ def build_analysis_prompt(
         boll_upper=tech.boll_upper, boll_mid=tech.boll_mid, boll_lower=tech.boll_lower,
         trend=tech.trend,
         support=tech.support, resistance=tech.resistance,
+        fundamental_text=fundamental_text,
         fund_flow_text=fund_flow_text,
         kline_summary=kline_summary,
         news_text=news_text,
