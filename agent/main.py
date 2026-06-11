@@ -12,20 +12,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from agent.user_router import UserRouter  # noqa: E402
 from application.chat_service import ChatService  # noqa: E402
 from infrastructure.database import init_db  # noqa: E402
+from infrastructure.log_setup import cleanup_old_logs, make_daily_handler  # noqa: E402
 from scheduler.daily_push import setup_scheduler  # noqa: E402
-
-_log_dir = Path(__file__).resolve().parent.parent / "data" / "logs"
-_log_dir.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
         logging.StreamHandler(sys.stderr),
-        logging.FileHandler(_log_dir / "agent.log", encoding="utf-8"),
+        make_daily_handler("agent.log"),
     ],
 )
 logger = logging.getLogger("stock-advisor")
+
+cleanup_old_logs()
 
 
 def _extract_text(content) -> str:

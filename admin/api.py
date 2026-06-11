@@ -359,17 +359,20 @@ async def update_config(req: UpdateConfigRequest):
 
 @router.get("/logs", dependencies=[Depends(verify_token)])
 async def list_log_files():
-    """列出可用日志文件"""
+    """列出可用日志文件（含轮转后的历史文件 agent.log.2026-06-11）"""
     if not LOG_DIR.exists():
         return []
     files = []
-    for f in sorted(LOG_DIR.iterdir()):
-        if f.is_file() and f.suffix in (".log", ".txt"):
-            files.append({
-                "name": f.name,
-                "size_kb": round(f.stat().st_size / 1024, 1),
-                "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
-            })
+    for f in sorted(LOG_DIR.iterdir(), reverse=True):
+        if not f.is_file():
+            continue
+        if ".log" not in f.name:
+            continue
+        files.append({
+            "name": f.name,
+            "size_kb": round(f.stat().st_size / 1024, 1),
+            "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+        })
     return files
 
 

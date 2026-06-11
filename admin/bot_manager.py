@@ -20,6 +20,9 @@ PYTHON_CMD = os.environ.get("PYTHON_CMD", f"{WORK_DIR}/.venv/bin/python")
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")
 DB_PATH = os.environ.get("DB_PATH", f"{WORK_DIR}/data/stock_advisor.db")
 
+CC_LOG_DIR = Path(WORK_DIR) / "data" / "logs"
+CC_LOG_PATH = CC_LOG_DIR / "cc-connect.log"
+
 
 async def regenerate_config():
     """从 DB 读取所有 active bot，生成 cc-connect config.toml"""
@@ -75,9 +78,14 @@ async def regenerate_config():
     logger.info("cc-connect config regenerated: %s (%d bots)", CC_CONFIG_PATH, len(bots))
 
 
+def _open_cc_log():
+    """打开 cc-connect 日志文件（追加模式）"""
+    CC_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return open(CC_LOG_PATH, "a", encoding="utf-8")
+
+
 def restart_cc_connect() -> str:
     """重启 cc-connect。优先 daemon restart（秒级），回退到 pkill + 重启"""
-    # 尝试 daemon restart（systemd/launchd 管理，最快恢复）
     ret = subprocess.run(
         ["cc-connect", "daemon", "restart"],
         capture_output=True, timeout=10,
@@ -86,7 +94,6 @@ def restart_cc_connect() -> str:
         logger.info("cc-connect daemon restarted")
         return "cc-connect 已通过 daemon 重启"
 
-    # 回退：手动 kill + 重启
     logger.info("daemon restart failed (code=%d), falling back to pkill", ret.returncode)
     try:
         subprocess.run(["pkill", "cc-connect"], capture_output=True)
@@ -94,13 +101,14 @@ def restart_cc_connect() -> str:
         pass
 
     try:
+        log_file = _open_cc_log()
         subprocess.Popen(
             ["cc-connect"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
             start_new_session=True,
         )
-        return "cc-connect 已重启"
+        return "cc-connect 已重启（日志输出到 cc-connect.log）"
     except Exception as e:
         logger.error("重启 cc-connect 失败: %s", e)
         return f"重启失败: {e}"
