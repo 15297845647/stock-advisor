@@ -2,6 +2,27 @@
 
 通过微信个人号与 AI 对话，获取 A 股和期货的每日技术分析和个性化推荐。
 
+## 核心功能
+
+| 功能 | 说明 |
+|------|------|
+| **智能对话** | 通过微信自然语言交互，自动识别意图（分析/推荐/关注/持仓等） |
+| **个股分析** | 技术面 + 基本面 + 资金流 + 新闻综合分析，输出结构化投资建议 |
+| **深度分析** | 4 路分析师并行（技术/基本面/新闻/资金）→ 多空辩论 → 风控评估 |
+| **股票推荐** | 基于全市场行情筛选，按用户风险偏好推荐 |
+| **期货分析** | 支持主力合约和指定合约的行情查询与分析 |
+| **持仓管理** | 通过对话记录持仓，AI 自动识别上下文中的持仓信息并确认 |
+| **操作策略推送** | 每日开盘前 09:00 和收盘后 15:30 自动推送持仓策略 |
+| **关注列表** | 自选股管理，收盘后自动分析并推送 |
+| **决策校准** | 规则引擎对 AI 决策进行二次校准（资金流/支撑位/RSI） |
+| **回测引擎** | 评估历史推荐的准确性（方向/目标价/止损） |
+| **市场红绿灯** | 综合涨跌家数、涨停跌停、指数变化判断市场情绪 |
+| **选股筛选** | 内置金叉选股、超跌反弹等预设策略 |
+| **多用户隔离** | 每个用户独立记忆、关注列表、持仓、风险偏好 |
+| **管理后台** | 用户管理、Bot 绑定、日志查看、配置管理 |
+
+---
+
 ## 架构
 
 ```
@@ -9,6 +30,95 @@
                                         ├── MiniMax M2.7 (分析 + 对话)
                                         ├── AKShare (行情数据)
                                         └── SQLite (记忆 + 缓存)
+```
+
+---
+
+## 项目目录结构
+
+```
+stock-advisor/
+├── cli.py                          # CLI 入口（start/admin/analyze/push/test-data）
+├── requirements.txt                # Python 依赖
+├── .env / .env.example             # 环境变量配置
+│
+├── agent/                          # Agent 入口层
+│   ├── main.py                     #   ACP Agent 主循环（stdio JSON-RPC）
+│   ├── config.py                   #   全局配置（API Key/端口/限频等）
+│   └── user_router.py              #   用户身份识别 & 上下文加载
+│
+├── application/                    # 应用服务层（流程编排）
+│   ├── chat_service.py             #   对话主路由（意图分发 → 各处理器）
+│   ├── analysis_service.py         #   股票/期货分析编排
+│   ├── analyst_agents.py           #   多分析师并行管线（技术/基本面/新闻/资金）
+│   ├── debate_service.py           #   多空辩论 + 风控评估编排
+│   ├── position_service.py         #   持仓管理（录入/确认/查询）
+│   ├── backtest_service.py         #   回测流程编排
+│   └── subscription_service.py     #   关注列表管理
+│
+├── domain/                         # 领域层（核心业务逻辑）
+│   ├── intent_parser.py            #   意图识别（关键词 + 规则）
+│   ├── prompt_builder.py           #   Prompt 构建器
+│   ├── stock_analyzer.py           #   分析指标计算
+│   ├── stock_screener.py           #   选股筛选引擎
+│   ├── decision_parser.py          #   结构化决策提取（从 LLM 输出）
+│   ├── decision_stabilizer.py      #   决策校准（规则引擎修正 AI 建议）
+│   ├── backtest_engine.py          #   回测核心（预测 vs 实际对比）
+│   ├── market_light.py             #   市场红绿灯（情绪指标）
+│   └── models/                     #   数据模型
+│       ├── stock.py                #     Stock/StockNews/StockDecision/StockFundamental
+│       ├── user_context.py         #     用户上下文
+│       └── analysis_report.py      #     分析报告
+│
+├── infrastructure/                 # 基础设施层（外部依赖对接）
+│   ├── akshare_client.py           #   AKShare 数据客户端（行情/K线/资金流/新闻/期货）
+│   ├── minimax_client.py           #   MiniMax LLM 客户端
+│   ├── database.py                 #   SQLite 连接 & 建表
+│   └── log_setup.py                #   日志配置（按天轮转/7天清理）
+│
+├── repository/                     # 数据访问层
+│   ├── user_repository.py          #   用户/记忆/关注列表 CRUD
+│   ├── position_repository.py      #   持仓 CRUD
+│   ├── report_repository.py        #   分析报告存取
+│   └── stock_repository.py         #   行情缓存存取
+│
+├── scheduler/                      # 定时任务
+│   └── daily_push.py               #   每日推送（09:00 持仓策略 / 15:30 分析报告）
+│
+├── prompts/                        # Prompt 模板
+│   ├── system.txt                  #   系统人设（含持仓检测指令）
+│   ├── analysis.txt                #   个股分析模板
+│   ├── recommend.txt               #   推荐模板
+│   ├── chat.txt                    #   自由对话模板
+│   ├── position_strategy.txt       #   持仓策略模板
+│   ├── debate_bull.txt             #   多头研究员
+│   ├── debate_bear.txt             #   空头研究员
+│   ├── debate_judge.txt            #   研究主管（裁决）
+│   ├── risk_conservative.txt       #   保守型风控
+│   ├── risk_aggressive.txt         #   激进型风控
+│   ├── risk_neutral.txt            #   中性风控
+│   └── risk_manager.txt            #   风控主管（综合）
+│
+├── admin/                          # 管理后台
+│   ├── server.py                   #   FastAPI 应用
+│   ├── api.py                      #   API 路由（用户/配置/日志/Bot）
+│   ├── auth.py                     #   JWT 认证
+│   ├── bot_manager.py              #   Bot 配置生成 & cc-connect 进程管理
+│   ├── startup.py                  #   后台启动（线程模式）
+│   └── static/index.html           #   前端页面（Alpine.js + Tailwind）
+│
+├── cc-connect/                     # cc-connect 配置模板
+│   └── config.example.toml
+│
+├── deploy/                         # 部署脚本
+│   └── setup.sh
+│
+└── data/                           # 运行时数据（不提交 git）
+    ├── stock_advisor.db            #   SQLite 数据库
+    └── logs/                       #   日志目录
+        ├── agent.log               #     Agent 日志（按天轮转）
+        ├── cc-connect.log          #     微信桥接日志
+        └── admin.log               #     管理后台日志
 ```
 
 ---
@@ -183,6 +293,109 @@ bash deploy/setup.sh
 ```
 
 这个脚本会自动安装所有依赖、配置系统服务，让系统开机自启。
+
+---
+
+## 代码更新 & 部署流程
+
+本地修改代码后，按以下步骤部署到服务器：
+
+### 1. 本地提交推送
+
+```bash
+cd ~/stock-advisor
+git add -A
+git commit -m "描述你的改动"
+git push
+```
+
+### 2. 服务器拉取代码
+
+```bash
+ssh root@你的服务器IP
+cd /opt/stock-advisor
+git pull
+```
+
+### 3. 重启服务（见下方「服务重启命令」）
+
+---
+
+## 服务重启命令
+
+服务器上有三个需要管理的进程：
+
+### 重启管理后台（Admin）
+
+```bash
+fuser -k 8900/tcp
+cd /opt/stock-advisor && nohup /opt/stock-advisor/.venv/bin/python -m cli admin >> /opt/stock-advisor/data/logs/admin.log 2>&1 &
+```
+
+### 重启 cc-connect（微信桥接）
+
+```bash
+pkill cc-connect
+cd /opt/stock-advisor && nohup cc-connect >> /opt/stock-advisor/data/logs/cc-connect.log 2>&1 &
+```
+
+也可以在管理后台页面点击「重启 cc-connect」按钮。
+
+### 全部重启（一键）
+
+```bash
+# 停掉所有服务
+fuser -k 8900/tcp; pkill cc-connect
+
+# 启动 admin
+cd /opt/stock-advisor && nohup /opt/stock-advisor/.venv/bin/python -m cli admin >> /opt/stock-advisor/data/logs/admin.log 2>&1 &
+
+# 启动 cc-connect
+nohup cc-connect >> /opt/stock-advisor/data/logs/cc-connect.log 2>&1 &
+```
+
+### 检查服务状态
+
+```bash
+# 检查 admin 是否在运行
+fuser 8900/tcp
+
+# 检查 cc-connect 是否在运行
+pgrep -a cc-connect
+
+# 查看 agent 日志（实时）
+tail -f /opt/stock-advisor/data/logs/agent.log
+
+# 查看 cc-connect 日志
+tail -f /opt/stock-advisor/data/logs/cc-connect.log
+
+# 查看 admin 日志
+tail -f /opt/stock-advisor/data/logs/admin.log
+```
+
+### 安装新依赖后
+
+如果修改了 `requirements.txt`，服务器上需要重新安装：
+
+```bash
+cd /opt/stock-advisor
+.venv/bin/pip install -r requirements.txt
+```
+
+然后重启相关服务。
+
+---
+
+## 日志管理
+
+- 日志目录：`data/logs/`
+- `agent.log` — AI 对话和数据拉取日志
+- `cc-connect.log` — 微信桥接日志
+- `admin.log` — 管理后台日志
+- 日志按天自动分割，保留 7 天，历史文件格式：`agent.log.2026-06-11`
+- 管理后台「日志查看」页可在线查看，支持级别过滤和关键词搜索
+
+---
 
 ## 成本
 
