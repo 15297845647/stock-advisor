@@ -354,6 +354,40 @@ async def update_config(req: UpdateConfigRequest):
     return {"ok": True, "message": "配置已保存，部分配置需重启生效"}
 
 
+# ────────────────────── 策略配置 ──────────────────────
+
+
+class UpdateStrategyConfigRequest(BaseModel):
+    lookback_days: int | None = None
+    max_boards: int | None = None
+    volume_ratio_min: float | None = None
+    candidate_cap: int | None = None
+    output_count: int | None = None
+    auto_watchlist: bool | None = None
+    advice_rule3: str | None = None
+    advice_rule4: str | None = None
+    advice_rule5: str | None = None
+
+
+@router.get("/strategy-config", dependencies=[Depends(verify_token)])
+async def get_strategy_config():
+    """读取养家选股策略配置（缺字段以默认值补全）"""
+    from application.config_service import ConfigService
+
+    cfg = await ConfigService().get_yangjia_config()
+    return cfg.to_dict()
+
+
+@router.put("/strategy-config", dependencies=[Depends(verify_token)])
+async def update_strategy_config(req: UpdateStrategyConfigRequest):
+    """更新养家选股策略配置，立即生效"""
+    from application.config_service import ConfigService
+
+    data = {k: v for k, v in req.model_dump().items() if v is not None}
+    cfg = await ConfigService().save_yangjia_config(data)
+    return {"ok": True, "config": cfg.to_dict()}
+
+
 # ────────────────────── 日志查看 ──────────────────────
 
 

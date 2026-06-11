@@ -36,6 +36,51 @@ def extract_decision(response: str) -> tuple[str, StockDecision | None]:
         return clean_text, None
 
 
+def _risk_label(risk_score: int) -> str:
+    """风险评分(1-10) → 小白可读等级"""
+    if risk_score <= 3:
+        return "低"
+    if risk_score <= 6:
+        return "中"
+    return "高"
+
+
+def format_verdict(decision: StockDecision, price: float, tech=None) -> str:
+    """面向非专业用户的结论版输出 — 只给可执行要点，不展开论证
+
+    tech 为技术面快照（含 support），仅用于推导买入区间下沿。
+    """
+    action_label = {
+        "买入": "🟢 建议买入",
+        "卖出": "🔴 建议卖出",
+        "持有": "🟡 建议持有",
+    }.get(decision.action, f"⚪ {decision.action}")
+
+    lines = [action_label, f"现价：{price:.2f}"]
+
+    # 买入区间：支撑位（无效则现价下浮3%）到现价
+    if decision.action == "买入":
+        support = getattr(tech, "support", None)
+        lower = support if (support and 0 < support < price) else round(price * 0.97, 2)
+        lines.append(f"建议买入区间：{lower:.2f} ~ {price:.2f}")
+
+    if decision.target_price > 0:
+        lines.append(f"目标价：{decision.target_price:.2f}")
+    if decision.stop_loss > 0:
+        lines.append(f"止损价：{decision.stop_loss:.2f}")
+
+    lines.append(f"风险等级：{_risk_label(decision.risk_score)}（{decision.risk_score}/10）")
+
+    # 理由只取首句，避免冗长
+    if decision.reasoning:
+        first_sentence = decision.reasoning.split("。")[0].strip()
+        if first_sentence:
+            lines.append(f"理由：{first_sentence}")
+
+    lines.append("仅供参考，不构成投资建议。")
+    return "\n".join(lines)
+
+
 def format_decision(decision: StockDecision) -> str:
     """将结构化决策格式化为用户可读文本"""
     action_emoji = {"买入": "🟢", "卖出": "🔴", "持有": "🟡"}.get(decision.action, "⚪")

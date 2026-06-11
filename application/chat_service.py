@@ -10,10 +10,11 @@ import re
 
 from application.analysis_service import AnalysisService
 from application.position_service import PositionService
+from application.stock_picker_service import StockPickerService
 from application.subscription_service import SubscriptionService
 from domain.intent_parser import Intent, parse_intent
 from domain.models.user_context import UserContext
-from domain.prompt_builder import build_chat_prompt, build_recommend_prompt, build_system_prompt
+from domain.prompt_builder import build_chat_prompt, build_system_prompt
 from infrastructure.akshare_client import AKShareClient
 from infrastructure.minimax_client import MiniMaxClient
 from repository.user_repository import UserRepository
@@ -33,6 +34,7 @@ class ChatService:
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
         self.akshare = AKShareClient()
+        self.picker = StockPickerService()
 
     async def handle(self, wechat_id: str, message: str, ctx: UserContext) -> str:
         await self.user_repo.append_chat(wechat_id, "user", message)
@@ -86,7 +88,7 @@ class ChatService:
                 return await BacktestService().run_backtest(days=30)
 
             case Intent.RECOMMEND:
-                return await self._handle_recommend(ctx)
+                return await self.picker.pick(ctx, wechat_id)
 
             case Intent.SCREEN_STOCKS:
                 return await self._handle_screen(parsed.raw_text)
@@ -262,28 +264,3 @@ class ChatService:
         footer = "\n\n回复股票代码可查看详细分析。\n以上仅供参考，不构成投资建议。"
         return header + "\n".join(results[:10]) + footer
 
-    async def _handle_recommend(self, ctx: UserContext) -> str:
-        try:
-            rank_data = await self.akshare.get_stock_rank_list(count=20)
-        except Exception as e:
-            logger.warning("涨幅榜获取失败: %s", e)
-            rank_data = []
-
-        try:
-            sector_data = await self.akshare.get_sector_fund_flow(count=10)
-        except Exception as e:
-            logger.warning("板块资金获取失败: %s", e)
-            sector_data = []
-
-        if not rank_data and not sector_data:
-            return "暂时无法获取行情数据，请稍后再试。"
-
-        system = build_system_prompt()
-        user_prompt = build_recommend_prompt(ctx, rank_data, sector_data)
-        messages = [{"role": "user", "content": user_prompt}]
-
-        try:
-            return await self.minimax.chat(system_prompt=system, messages=messages)
-        except Exception as e:
-            logger.exception("推荐LLM调用失败")
-            return f"推荐功能暂时不可用，请稍后再试。（{type(e).__name__}）"

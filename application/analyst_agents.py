@@ -11,7 +11,7 @@
 import asyncio
 import logging
 
-from domain.decision_parser import extract_decision, format_decision
+from domain.decision_parser import extract_decision, format_verdict
 from domain.decision_stabilizer import stabilize_decision
 from infrastructure.minimax_client import MiniMaxClient
 
@@ -35,7 +35,7 @@ class AnalystPipeline:
         tech_snapshot=None,
         fund_flows=None,
     ) -> str:
-        """完整分析管线：4分析师并行 → 辩论 → 风控"""
+        """完整分析管线：4分析师并行 → 多空辩论 → Manager 裁决 → 结论版输出"""
 
         # Phase 1: 4 分析师并行
         tasks = [
@@ -68,37 +68,30 @@ class AnalystPipeline:
         # Phase 3: Manager 裁决
         judge = await self._judge(stock_name, stock_code, price, bull, bear)
 
-        # Phase 4: 风控三方评估
-        risk = await self._risk_assessment(judge, combined_data)
+        # 输出结论版：内部多 agent 论证不展开，只给可执行要点
+        return self._build_verdict_report(
+            stock_name, stock_code, price, judge, tech_snapshot, fund_flows
+        )
 
-        # 组装报告
-        lines = [
-            f"📊 {stock_name}（{stock_code}）深度分析报告\n",
-            "━━━ 📈 技术面 ━━━", tech_report[:500],
-            "\n━━━ 📋 基本面 ━━━", fund_report[:500],
-            "\n━━━ 📰 消息面 ━━━", news_report[:500],
-            "\n━━━ 💰 资金面 ━━━", capital_report[:500],
-            "\n━━━ 🟢 看涨论证 ━━━", bull[:600],
-            "\n━━━ 🔴 看跌论证 ━━━", bear[:600],
-            "\n━━━ ⚖️ 综合裁决 ━━━",
-        ]
+    def _build_verdict_report(
+        self, stock_name, stock_code, price, judge, tech_snapshot, fund_flows
+    ) -> str:
+        """从裁决结果提炼结论版报告（小白友好）"""
+        header = f"📊 {stock_name}（{stock_code}）\n"
 
-        judge_text, decision = extract_decision(judge)
-        lines.append(judge_text)
+        _, decision = extract_decision(judge)
+        if not decision:
+            return header + "本次分析未生成明确操作建议，建议保持观望。"
 
-        if decision:
-            if tech_snapshot and fund_flows is not None:
-                result = stabilize_decision(decision, price, tech_snapshot, fund_flows)
-                if result.adjusted:
-                    lines.append(f"\n⚠️ 决策校准：{result.reason}")
-                lines.append(format_decision(result.decision))
-            else:
-                lines.append(format_decision(decision))
+        # 有完整技术面+资金面 → 先过风控规则校准
+        if tech_snapshot and fund_flows is not None:
+            result = stabilize_decision(decision, price, tech_snapshot, fund_flows)
+            body = format_verdict(result.decision, price, tech_snapshot)
+            if result.adjusted:
+                body += "\n（已按风控规则自动校准）"
+            return header + body
 
-        lines.append("\n━━━ 🛡️ 风险评估 ━━━")
-        lines.append(risk)
-
-        return "\n".join(lines)
+        return header + format_verdict(decision, price, tech_snapshot)
 
     async def _technical_analyst(self, tech_text: str, kline_text: str, name: str) -> str:
         return await self.minimax.chat(
@@ -162,15 +155,3 @@ class AnalystPipeline:
                 f'"key_points":["要点1","要点2","要点3"]}}[/DECISION]'}],
         )
 
-    async def _risk_assessment(self, decision_text: str, analysis_data: str) -> str:
-        """三方风险评估简化版 — 单次调用综合三个视角"""
-        return await self.minimax.chat(
-            system_prompt="你同时扮演三个角色：保守风险分析师、激进风险分析师、中性风险分析师。",
-            messages=[{"role": "user", "content":
-                f"投资决策：\n{decision_text[:600]}\n\n分析数据摘要：\n{analysis_data[:600]}\n\n"
-                f"请分别从三个视角评估：\n"
-                f"【保守视角】风险因素、最坏情况、止损建议\n"
-                f"【激进视角】还有多大上涨空间、是否可以更大胆\n"
-                f"【中性视角】综合风险收益比、合理仓位建议\n\n"
-                f"最后给出：风险等级(低/中/高)、建议仓位比例、关键风险信号"}],
-        )

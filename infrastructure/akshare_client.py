@@ -499,6 +499,54 @@ class AKShareClient:
             return cached[:count]
         return []
 
+    # ── 活跃候选池（养家选股阶段A：量比筛活跃股）──
+
+    async def get_active_pool(
+        self, min_volume_ratio: float = 1.5, cap: int = 40
+    ) -> list[dict]:
+        """从全量行情按量比筛活跃股，按量比降序返回候选池
+
+        排除今日已涨停（尾盘难买入）与无效数据，仅做粗筛，
+        连板/涨停回溯等K线规则交由调用方在阶段B处理。
+        """
+        import pandas as pd
+
+        try:
+            df = await _get_spot_df()
+        except Exception as e:
+            logger.warning("活跃池获取失败: %s", e)
+            return []
+
+        if df is None or df.empty:
+            return []
+
+        ratio_col = _col(df, "量比", "volume_ratio")
+        chg_col = _col(df, "涨跌幅", "pct_chg", "changepercent")
+        if not ratio_col or not chg_col:
+            logger.warning("行情缺少量比/涨跌幅列，无法筛活跃池")
+            return []
+
+        df = df.copy()
+        df[ratio_col] = pd.to_numeric(df[ratio_col], errors="coerce")
+        df[chg_col] = pd.to_numeric(df[chg_col], errors="coerce")
+        df = df.dropna(subset=[ratio_col, chg_col])
+
+        # 量比达标 且 今日未涨停（涨幅 < 9.8，留买入空间）
+        df = df[(df[ratio_col] >= min_volume_ratio) & (df[chg_col] < 9.8)]
+        df = df.sort_values(ratio_col, ascending=False).head(cap)
+
+        result = []
+        for _, r in df.iterrows():
+            result.append({
+                "code": str(r["代码"]),
+                "name": str(r["名称"]),
+                "price": float(r["最新价"]),
+                "change_pct": float(r[chg_col]),
+                "volume_ratio": float(r[ratio_col]),
+                "turnover": float(r.get("换手率", 0)),
+            })
+        return result
+
     # ── 市场广度统计（涨跌家数 + 涨跌停）──
 
     async def get_market_breadth(self) -> dict:

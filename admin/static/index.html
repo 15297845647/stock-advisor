@@ -429,6 +429,67 @@
         </div>
 
         <!-- 配置管理 -->
+        <!-- 策略配置 -->
+        <div x-show="page==='strategy'" class="fade-in">
+          <h2 class="text-xl font-bold mb-6">养家选股策略配置</h2>
+          <p class="text-xs text-gray-400 mb-4">「炒股养家最笨的方法」选股参数，保存后实时生效（用户发送「推荐股票」即按此策略选股）。</p>
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-2xl">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">涨停回溯天数</label>
+                <input type="number" x-model.number="strategyCfg.lookback_days"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">排除连板数（≥剔除）</label>
+                <input type="number" x-model.number="strategyCfg.max_boards"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">量比阈值</label>
+                <input type="number" step="0.1" x-model.number="strategyCfg.volume_ratio_min"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">候选池上限</label>
+                <input type="number" x-model.number="strategyCfg.candidate_cap"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">输出条数</label>
+                <input type="number" x-model.number="strategyCfg.output_count"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div class="flex items-center gap-2 pt-6">
+                <input type="checkbox" id="autoWatch" x-model="strategyCfg.auto_watchlist" class="w-4 h-4">
+                <label for="autoWatch" class="text-sm text-gray-500">入选自动加自选</label>
+              </div>
+            </div>
+            <hr class="border-gray-100 my-4">
+            <div class="space-y-3">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">操作提示 1（开盘看方向）</label>
+                <textarea x-model="strategyCfg.advice_rule3" rows="2"
+                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"></textarea>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">操作提示 2（5日线生命线）</label>
+                <textarea x-model="strategyCfg.advice_rule4" rows="2"
+                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"></textarea>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">操作提示 3（尾盘买次日卖）</label>
+                <textarea x-model="strategyCfg.advice_rule5" rows="2"
+                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"></textarea>
+              </div>
+            </div>
+            <div class="mt-5">
+              <button @click="saveStrategy()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存策略</button>
+              <span x-show="strategySaved" class="text-green-600 text-sm ml-2" x-text="strategyMsg"></span>
+            </div>
+          </div>
+        </div>
+
         <div x-show="page==='config'" class="fade-in">
           <h2 class="text-xl font-bold mb-6">配置管理</h2>
           <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg">
@@ -511,9 +572,15 @@ function admin() {
     cfgSaved: false,
     cfgSavedMsg: '',
 
+    // strategy config
+    strategyCfg: {},
+    strategySaved: false,
+    strategyMsg: '',
+
     menu: [
       { key: 'dashboard', label: '仪表盘' },
       { key: 'users', label: '用户管理' },
+      { key: 'strategy', label: '策略配置' },
       { key: 'logs', label: '日志查看' },
       { key: 'config', label: '配置管理' },
     ],
@@ -521,8 +588,9 @@ function admin() {
     async init() {
       this.menu[0].load = () => this.loadDashboard();
       this.menu[1].load = () => this.loadUsers();
-      this.menu[2].load = () => this.loadLogFiles();
-      this.menu[3].load = () => this.loadConfig();
+      this.menu[2].load = () => this.loadStrategy();
+      this.menu[3].load = () => this.loadLogFiles();
+      this.menu[4].load = () => this.loadConfig();
       if (this.token) await this.loadDashboard();
     },
 
@@ -727,6 +795,18 @@ function admin() {
       const d = await this.api('/api/config', { method:'PUT', body:JSON.stringify(body) });
       if (d) { this.cfgSaved = true; this.cfgSavedMsg = d.message || '已保存'; }
       setTimeout(() => this.cfgSaved = false, 3000);
+    },
+
+    // ── Strategy Config ──
+    async loadStrategy() {
+      const d = await this.api('/api/strategy-config');
+      if (d) this.strategyCfg = d;
+    },
+
+    async saveStrategy() {
+      const d = await this.api('/api/strategy-config', { method:'PUT', body:JSON.stringify(this.strategyCfg) });
+      if (d && d.ok) { this.strategySaved = true; this.strategyMsg = '已保存，实时生效'; this.strategyCfg = d.config; }
+      setTimeout(() => this.strategySaved = false, 3000);
     },
   }
 }
