@@ -353,6 +353,81 @@
           </div>
         </div>
 
+        <!-- 日志查看 -->
+        <div x-show="page==='logs'" class="fade-in">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-bold">日志查看</h2>
+            <div class="flex items-center gap-3">
+              <!-- 自动刷新 -->
+              <label class="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
+                <input type="checkbox" x-model="logAutoRefresh" @change="toggleLogAutoRefresh()"
+                       class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                自动刷新
+              </label>
+              <span x-show="logAutoRefresh" class="text-xs text-green-600 animate-pulse">● 实时</span>
+            </div>
+          </div>
+
+          <!-- 过滤栏 -->
+          <div class="flex flex-wrap items-center gap-3 mb-4">
+            <!-- 文件选择 -->
+            <select x-model="logFile" @change="loadLogs()" class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              <template x-for="f in logFiles" :key="f.name">
+                <option :value="f.name" x-text="f.name + ' (' + f.size_kb + ' KB)'"></option>
+              </template>
+            </select>
+
+            <!-- 级别过滤 -->
+            <div class="flex rounded-lg border border-gray-200 overflow-hidden">
+              <button @click="logLevel=''; loadLogs()" :class="logLevel===''?'bg-blue-600 text-white':'bg-white text-gray-600 hover:bg-gray-50'" class="px-3 py-2 text-xs font-medium transition">全部</button>
+              <button @click="logLevel='INFO'; loadLogs()" :class="logLevel==='INFO'?'bg-blue-600 text-white':'bg-white text-gray-600 hover:bg-gray-50'" class="px-3 py-2 text-xs font-medium border-l border-gray-200 transition">INFO</button>
+              <button @click="logLevel='WARNING'; loadLogs()" :class="logLevel==='WARNING'?'bg-yellow-500 text-white':'bg-white text-gray-600 hover:bg-gray-50'" class="px-3 py-2 text-xs font-medium border-l border-gray-200 transition">WARNING</button>
+              <button @click="logLevel='ERROR'; loadLogs()" :class="logLevel==='ERROR'?'bg-red-500 text-white':'bg-white text-gray-600 hover:bg-gray-50'" class="px-3 py-2 text-xs font-medium border-l border-gray-200 transition">ERROR</button>
+            </div>
+
+            <!-- 搜索 -->
+            <div class="relative flex-1 min-w-[200px] max-w-md">
+              <input type="text" x-model="logSearch" @keydown.enter="loadLogs()" placeholder="搜索关键词（回车搜索）"
+                     class="w-full border border-gray-200 rounded-lg pl-3 pr-8 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              <button @click="logSearch=''; loadLogs()" x-show="logSearch" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">✕</button>
+            </div>
+
+            <!-- 行数 -->
+            <select x-model="logLines" @change="loadLogs()" class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              <option value="100">100 行</option>
+              <option value="300">300 行</option>
+              <option value="500">500 行</option>
+              <option value="1000">1000 行</option>
+            </select>
+
+            <button @click="loadLogs()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition">刷新</button>
+          </div>
+
+          <!-- 统计 -->
+          <div class="flex items-center gap-4 text-xs text-gray-400 mb-3">
+            <span x-text="'共 ' + logContent.length + ' 行'"></span>
+            <span x-text="'ERROR: ' + logContent.filter(l => l.includes('[ERROR]')).length"></span>
+            <span x-text="'WARNING: ' + logContent.filter(l => l.includes('[WARNING]')).length"></span>
+          </div>
+
+          <!-- 日志内容 -->
+          <div class="bg-gray-900 rounded-xl shadow-sm border border-gray-700 overflow-hidden">
+            <div x-ref="logContainer" class="overflow-auto font-mono text-xs leading-relaxed p-4" style="max-height:calc(100vh - 320px); min-height:400px;">
+              <template x-for="(line, idx) in logContent" :key="idx">
+                <div class="py-0.5 whitespace-pre-wrap break-all border-b border-gray-800/50"
+                     :class="{
+                       'text-red-400': line.includes('[ERROR]'),
+                       'text-yellow-400': line.includes('[WARNING]'),
+                       'text-green-400': line.includes('[INFO]') && !line.includes('[ERROR]') && !line.includes('[WARNING]'),
+                       'text-gray-400': !line.includes('[ERROR]') && !line.includes('[WARNING]') && !line.includes('[INFO]')
+                     }"
+                     x-text="line"></div>
+              </template>
+              <div x-show="logContent.length===0" class="text-gray-500 text-center py-12">暂无日志内容</div>
+            </div>
+          </div>
+        </div>
+
         <!-- 配置管理 -->
         <div x-show="page==='config'" class="fade-in">
           <h2 class="text-xl font-bold mb-6">配置管理</h2>
@@ -420,6 +495,16 @@ function admin() {
     _setupPollTimer: null,
     restartMsg: '',
 
+    // logs
+    logFiles: [],
+    logFile: 'agent.log',
+    logLevel: '',
+    logSearch: '',
+    logLines: '300',
+    logContent: [],
+    logAutoRefresh: false,
+    _logRefreshTimer: null,
+
     // config
     cfg: {},
     newPassword: '',
@@ -429,13 +514,15 @@ function admin() {
     menu: [
       { key: 'dashboard', label: '仪表盘' },
       { key: 'users', label: '用户管理' },
+      { key: 'logs', label: '日志查看' },
       { key: 'config', label: '配置管理' },
     ],
 
     async init() {
       this.menu[0].load = () => this.loadDashboard();
       this.menu[1].load = () => this.loadUsers();
-      this.menu[2].load = () => this.loadConfig();
+      this.menu[2].load = () => this.loadLogFiles();
+      this.menu[3].load = () => this.loadConfig();
       if (this.token) await this.loadDashboard();
     },
 
@@ -585,6 +672,42 @@ function admin() {
       const d = await this.api('/api/restart', { method:'POST' });
       this.restartMsg = d?.message || '已发送重启命令';
       setTimeout(() => this.restartMsg = '', 5000);
+    },
+
+    // ── Logs ──
+    async loadLogFiles() {
+      const d = await this.api('/api/logs');
+      if (d) {
+        this.logFiles = d;
+        if (d.length && !d.find(f => f.name === this.logFile)) {
+          this.logFile = d[0].name;
+        }
+      }
+      await this.loadLogs();
+    },
+
+    async loadLogs() {
+      const params = new URLSearchParams({
+        file: this.logFile,
+        lines: this.logLines,
+        level: this.logLevel,
+        search: this.logSearch,
+      });
+      const d = await this.api('/api/logs/content?' + params.toString());
+      if (d) {
+        this.logContent = d.content || [];
+        this.$nextTick(() => {
+          const el = this.$refs.logContainer;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      }
+    },
+
+    toggleLogAutoRefresh() {
+      if (this._logRefreshTimer) { clearInterval(this._logRefreshTimer); this._logRefreshTimer = null; }
+      if (this.logAutoRefresh) {
+        this._logRefreshTimer = setInterval(() => this.loadLogs(), 5000);
+      }
     },
 
     // ── Config ──

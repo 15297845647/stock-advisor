@@ -4,7 +4,7 @@ import os
 from datetime import date, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -20,6 +20,8 @@ from agent.config import (
 from infrastructure.database import get_connection
 
 router = APIRouter(prefix="/api")
+
+LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs"
 
 
 # ────────────────────── Auth ──────────────────────
@@ -350,6 +352,81 @@ async def update_config(req: UpdateConfigRequest):
 
     _write_env_file(env_path, env_map)
     return {"ok": True, "message": "配置已保存，部分配置需重启生效"}
+
+
+# ────────────────────── 日志查看 ──────────────────────
+
+
+@router.get("/logs", dependencies=[Depends(verify_token)])
+async def list_log_files():
+    """列出可用日志文件"""
+    if not LOG_DIR.exists():
+        return []
+    files = []
+    for f in sorted(LOG_DIR.iterdir()):
+        if f.is_file() and f.suffix in (".log", ".txt"):
+            files.append({
+                "name": f.name,
+                "size_kb": round(f.stat().st_size / 1024, 1),
+                "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+            })
+    return files
+
+
+@router.get("/logs/content", dependencies=[Depends(verify_token)])
+async def read_log_content(
+    file: str = Query("agent.log", description="日志文件名"),
+    lines: int = Query(300, ge=10, le=5000, description="返回行数"),
+    level: str = Query("", description="按级别过滤: INFO/WARNING/ERROR"),
+    search: str = Query("", description="关键词搜索"),
+):
+    """读取日志文件末尾内容，支持级别过滤和关键词搜索"""
+    # 安全校验：防止路径穿越
+    if ".." in file or "/" in file or "\\" in file:
+        raise HTTPException(400, "非法文件名")
+
+    log_path = LOG_DIR / file
+    if not log_path.exists():
+        raise HTTPException(404, f"日志文件不存在: {file}")
+
+    all_lines = _tail_file(log_path, max_lines=lines * 3)
+
+    if level:
+        level_upper = level.upper()
+        all_lines = [ln for ln in all_lines if f"[{level_upper}]" in ln]
+
+    if search:
+        all_lines = [ln for ln in all_lines if search.lower() in ln.lower()]
+
+    result_lines = all_lines[-lines:]
+
+    return {
+        "file": file,
+        "total_lines": len(result_lines),
+        "content": result_lines,
+    }
+
+
+def _tail_file(path: Path, max_lines: int = 1000) -> list[str]:
+    """高效读取文件末尾 N 行（避免大文件全量加载）"""
+    try:
+        size = path.stat().st_size
+        if size == 0:
+            return []
+        # 小文件直接全读
+        if size < 2 * 1024 * 1024:
+            return path.read_text(encoding="utf-8", errors="replace").splitlines()[-max_lines:]
+        # 大文件从尾部读
+        chunk_size = min(size, max_lines * 500)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - chunk_size))
+            data = f.read().decode("utf-8", errors="replace")
+        lines = data.splitlines()
+        if len(lines) > 0 and f.tell() != size:
+            lines = lines[1:]
+        return lines[-max_lines:]
+    except Exception:
+        return []
 
 
 # ────────────────────── helpers ──────────────────────
