@@ -54,6 +54,22 @@ def is_active(volume_ratio: float, threshold: float) -> bool:
     return volume_ratio >= threshold
 
 
+def volume_ratio_from_bars(bars: list[StockDailyBar], period: int = 5) -> float | None:
+    """用日K估算量比代理：最新成交量 / 前 N 日均量
+
+    实时量比需分时数据，这里用日级近似（源无关，腾讯/东财K线均可），
+    数据不足返回 None（由调用方决定是否放行）。
+    """
+    if len(bars) < period + 1:
+        return None
+    today_vol = bars[-1].volume
+    prev = [b.volume for b in bars[-period - 1:-1]]
+    avg = sum(prev) / len(prev) if prev else 0
+    if avg <= 0:
+        return None
+    return round(today_vol / avg, 2)
+
+
 def below_ma5(price: float, ma5: float | None) -> bool:
     """规则4：是否跌破 5 日线"""
     if not ma5 or ma5 <= 0:
@@ -68,6 +84,7 @@ class ScreenResult:
     recent_limit_up: bool
     consecutive_boards: int
     broke_ma5: bool
+    volume_ratio: float | None = None
     reasons: list[str] = field(default_factory=list)
 
 
@@ -78,10 +95,11 @@ def screen(
     ma5: float | None,
     cfg: YangjiaConfig,
 ) -> ScreenResult:
-    """对单只候选股做养家规则判定（规则1 + 规则4）"""
+    """对单只候选股做养家规则判定（规则1 涨停回溯 + 规则2 量比 + 规则4 5日线）"""
     recent = had_recent_limit_up(bars, code, cfg.lookback_days)
     boards = count_consecutive_boards(bars, code)
     broke = below_ma5(price, ma5)
+    vr = volume_ratio_from_bars(bars)
 
     reasons: list[str] = []
     # 规则1：近期有涨停 且 连板数未达剔除线
@@ -93,6 +111,15 @@ def screen(
     else:
         reasons.append(f"近 {cfg.lookback_days} 天内曾涨停（{boards} 连板）")
 
+    # 规则2：量比达标（数据不足则放行，不误杀）
+    rule2_ok = vr is None or vr >= cfg.volume_ratio_min
+    if vr is None:
+        reasons.append("量比数据不足，跳过该项")
+    elif vr >= cfg.volume_ratio_min:
+        reasons.append(f"量比 {vr}（活跃）")
+    else:
+        reasons.append(f"量比 {vr} 低于 {cfg.volume_ratio_min}，资金未动，剔除")
+
     # 规则4：未跌破 5 日线
     rule4_ok = not broke
     if broke:
@@ -101,9 +128,10 @@ def screen(
         reasons.append("站稳 5 日线之上")
 
     return ScreenResult(
-        passed=rule1_ok and rule4_ok,
+        passed=rule1_ok and rule2_ok and rule4_ok,
         recent_limit_up=recent,
         consecutive_boards=boards,
         broke_ma5=broke,
+        volume_ratio=vr,
         reasons=reasons,
     )

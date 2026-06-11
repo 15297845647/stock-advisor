@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from datetime import date, datetime, timedelta
 from functools import partial
@@ -120,16 +121,119 @@ async def _run_with_retry(func, *args, group: str = "default", retries: int = 2,
                 raise
 
 
-# ── 全量行情内存缓存（60s TTL）──
+# ── 全量行情缓存（内存 60s TTL + 磁盘兜底）──
 
 _spot_cache_data = None
 _spot_cache_time: float = 0
 _spot_cache_lock = asyncio.Lock()
 _SPOT_CACHE_TTL = 60
 
+# 东财全量快照落盘（含量比等完整列），跨重启兜底
+_SPOT_DISK_CACHE = _CACHE_DIR / "spot_full_em.pkl"
+_SPOT_DISK_MAX_AGE_HOURS = 18
+
+
+def _save_spot_disk(df) -> None:
+    """全量快照落盘（任意源），live 全挂时兜底"""
+    try:
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        df.to_pickle(_SPOT_DISK_CACHE)
+    except Exception as e:
+        logger.warning("全量行情落盘失败: %s", e)
+
+
+def _load_spot_disk(max_age_hours: int = _SPOT_DISK_MAX_AGE_HOURS):
+    """读取东财全量磁盘快照，超龄或不存在返回 None"""
+    try:
+        if not _SPOT_DISK_CACHE.exists():
+            return None
+        age_hours = (time.time() - _SPOT_DISK_CACHE.stat().st_mtime) / 3600
+        if age_hours > max_age_hours:
+            logger.warning("全量行情磁盘快照超龄(%.1fh)，弃用", age_hours)
+            return None
+        import pandas as pd
+        df = pd.read_pickle(_SPOT_DISK_CACHE)
+        logger.info("全量行情使用磁盘快照(%.1fh前)，共 %d 条", age_hours, len(df))
+        return df
+    except Exception as e:
+        logger.warning("全量行情磁盘快照读取失败: %s", e)
+        return None
+
+
+# 东财全量行情 HTTP 直连（绕开 akshare spot_em 不跟随 302 跳转的问题）
+# 东财已将 push2 重定向至 push2delay，旧版 akshare 不跟随导致连接被断。
+_EM_SPOT_URL = "https://push2delay.eastmoney.com/api/qt/clist/get"
+_EM_FIELD_MAP = {
+    "f12": "代码", "f14": "名称", "f2": "最新价", "f3": "涨跌幅", "f4": "涨跌额",
+    "f5": "成交量", "f6": "成交额", "f15": "最高", "f16": "最低",
+    "f17": "今开", "f18": "昨收", "f8": "换手率", "f10": "量比",
+}
+_EM_SPOT_NUMERIC = (
+    "最新价", "涨跌幅", "涨跌额", "成交量", "成交额",
+    "最高", "最低", "今开", "昨收", "换手率", "量比",
+)
+
+
+# 东财每页上限 100 条，分页拉取全市场
+_EM_PAGE_SIZE = 100
+_EM_MAX_PAGES = 100
+
+
+async def _fetch_eastmoney_spot_http():
+    """直连东财 push2delay 分页拉全量行情，返回 akshare 同构 DataFrame（含量比）"""
+    import httpx
+    import pandas as pd
+
+    base_params = {
+        "pz": _EM_PAGE_SIZE, "po": 1, "np": 1, "fltt": 2, "invt": 2, "fid": "f3",
+        "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
+        "fields": ",".join(_EM_FIELD_MAP),
+    }
+    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/"}
+
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+        async def fetch_page(pn: int) -> dict:
+            resp = await client.get(
+                _EM_SPOT_URL, params={**base_params, "pn": pn}, headers=headers
+            )
+            resp.raise_for_status()
+            return (resp.json() or {}).get("data") or {}
+
+        # 首页拿 total，据此并发拉取剩余页（限并发降低被限流概率）
+        first = await fetch_page(1)
+        all_items: list[dict] = list(first.get("diff") or [])
+        if not all_items:
+            return None
+        total = int(first.get("total") or 0)
+        pages = min((total + _EM_PAGE_SIZE - 1) // _EM_PAGE_SIZE, _EM_MAX_PAGES)
+
+        if pages > 1:
+            sem = asyncio.Semaphore(8)
+
+            async def guarded(pn: int) -> list:
+                async with sem:
+                    data = await fetch_page(pn)
+                    return data.get("diff") or []
+
+            results = await asyncio.gather(
+                *[guarded(pn) for pn in range(2, pages + 1)], return_exceptions=True
+            )
+            for r in results:
+                if isinstance(r, list):
+                    all_items.extend(r)
+                else:
+                    logger.warning("东财分页拉取部分失败: %s", r)
+
+    rows = [{cn: item.get(fc) for fc, cn in _EM_FIELD_MAP.items()} for item in all_items]
+    df = pd.DataFrame(rows)
+    df["代码"] = df["代码"].astype(str)
+    for col in _EM_SPOT_NUMERIC:
+        df[col] = pd.to_numeric(df[col], errors="coerce")  # "-" → NaN
+    return df
+
 
 async def _get_spot_df():
-    """获取 A 股全量行情，60s 缓存，东财 → 新浪 fallback"""
+    """全量行情：内存 → 东财HTTP直连 → akshare东财 → 新浪 → 过期内存 → 磁盘"""
     global _spot_cache_data, _spot_cache_time
 
     async with _spot_cache_lock:
@@ -137,32 +241,53 @@ async def _get_spot_df():
         if _spot_cache_data is not None and (now - _spot_cache_time) < _SPOT_CACHE_TTL:
             return _spot_cache_data
 
-        # 优先东方财富（稳定不封IP）
+        # 优先东财 HTTP 直连（push2delay，列最全含量比，代码纯6位）
+        try:
+            df = await _fetch_eastmoney_spot_http()
+            if df is not None and not df.empty:
+                _spot_cache_data = df
+                _spot_cache_time = time.monotonic()
+                _save_spot_disk(df)
+                logger.info("全量行情已刷新(东财HTTP源)，共 %d 条", len(df))
+                return df
+        except Exception as e:
+            logger.warning("东财HTTP直连失败: %s，尝试 akshare 东财源", e)
+
+        # 次选 akshare 东财（若官方修复跳转后可用）
         try:
             df = await _run_with_retry(ak.stock_zh_a_spot_em, group="spot")
             if df is not None and not df.empty:
                 _spot_cache_data = df
                 _spot_cache_time = time.monotonic()
-                logger.info("全量行情已刷新(东财源)，共 %d 条", len(df))
+                _save_spot_disk(df)
+                logger.info("全量行情已刷新(akshare东财源)，共 %d 条", len(df))
                 return df
         except Exception as e:
-            logger.warning("东财实时行情失败: %s，尝试新浪源", e)
+            logger.warning("akshare东财实时行情失败: %s，尝试新浪源", e)
 
-        # 降级新浪（注意：频繁调用会被封IP）
+        # 降级新浪（注意：频繁调用会被封IP；列不含量比）
         try:
             df = await _run_with_retry(ak.stock_zh_a_spot, group="spot_sina")
             if df is not None and not df.empty:
                 _spot_cache_data = df
                 _spot_cache_time = time.monotonic()
+                _save_spot_disk(df)  # 新浪源也落盘兜底
                 logger.info("全量行情已刷新(新浪源)，共 %d 条", len(df))
                 return df
         except Exception as e:
             logger.error("新浪实时行情也失败: %s", e)
 
-        # 两源都挂：返回上一次缓存（即使过期）
+        # 两源都挂：返回上一次内存缓存（即使过期）
         if _spot_cache_data is not None:
-            logger.warning("行情源均不可用，使用过期缓存")
+            logger.warning("行情源均不可用，使用过期内存缓存")
             return _spot_cache_data
+
+        # 最终兜底：东财磁盘快照
+        disk_df = _load_spot_disk()
+        if disk_df is not None and not disk_df.empty:
+            _spot_cache_data = disk_df
+            _spot_cache_time = time.monotonic()
+            return disk_df
 
         import pandas as pd
         logger.error("所有实时行情源均不可用，返回空数据")
@@ -191,6 +316,15 @@ def _load_cache(name: str, max_age_days: int = 1) -> list[dict]:
     except Exception:
         pass
     return []
+
+
+_CODE6_RE = re.compile(r"(\d{6})")
+
+
+def _normalize_code(raw: str) -> str:
+    """归一股票代码为 6 位数字（兼容新浪 sh600000/sz000001 等前缀格式）"""
+    m = _CODE6_RE.search(raw or "")
+    return m.group(1) if m else ""
 
 
 def _col(df, *candidates) -> str | None:
@@ -520,30 +654,47 @@ class AKShareClient:
         if df is None or df.empty:
             return []
 
-        ratio_col = _col(df, "量比", "volume_ratio")
+        code_col = _col(df, "代码", "code", "symbol")
+        price_col = _col(df, "最新价", "trade", "price")
         chg_col = _col(df, "涨跌幅", "pct_chg", "changepercent")
-        if not ratio_col or not chg_col:
-            logger.warning("行情缺少量比/涨跌幅列，无法筛活跃池")
+        if not (code_col and price_col and chg_col):
+            logger.warning("行情缺少代码/最新价/涨跌幅列，无法筛活跃池")
             return []
 
         df = df.copy()
-        df[ratio_col] = pd.to_numeric(df[ratio_col], errors="coerce")
+        df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
         df[chg_col] = pd.to_numeric(df[chg_col], errors="coerce")
-        df = df.dropna(subset=[ratio_col, chg_col])
+        df = df.dropna(subset=[price_col, chg_col])
 
-        # 量比达标 且 今日未涨停（涨幅 < 9.8，留买入空间）
-        df = df[(df[ratio_col] >= min_volume_ratio) & (df[chg_col] < 9.8)]
-        df = df.sort_values(ratio_col, ascending=False).head(cap)
+        # 量比仅东财源有：有则按量比粗筛+排序；无则用涨幅活跃度，量比下沉阶段B用K线校验
+        ratio_col = _col(df, "量比", "volume_ratio")
+        if ratio_col:
+            df[ratio_col] = pd.to_numeric(df[ratio_col], errors="coerce")
+            df = df.dropna(subset=[ratio_col])
+            df = df[df[ratio_col] >= min_volume_ratio]
+            sort_col = ratio_col
+        else:
+            logger.info("行情无量比列（新浪源），改用涨幅活跃度粗筛，量比交由阶段B校验")
+            sort_col = chg_col
 
+        # 排除今日涨停（尾盘难买入，留买入空间）
+        df = df[df[chg_col] < 9.8]
+        df = df.sort_values(sort_col, ascending=False).head(cap)
+
+        turnover_col = _col(df, "换手率", "turnoverratio")
+        name_col = _col(df, "名称", "name")
         result = []
         for _, r in df.iterrows():
+            code = _normalize_code(str(r[code_col]))
+            if not code:
+                continue
             result.append({
-                "code": str(r["代码"]),
-                "name": str(r["名称"]),
-                "price": float(r["最新价"]),
+                "code": code,
+                "name": str(r[name_col]) if name_col else code,
+                "price": float(r[price_col]),
                 "change_pct": float(r[chg_col]),
-                "volume_ratio": float(r[ratio_col]),
-                "turnover": float(r.get("换手率", 0)),
+                "volume_ratio": float(r[ratio_col]) if ratio_col else 0.0,
+                "turnover": float(r[turnover_col]) if turnover_col else 0.0,
             })
         return result
 

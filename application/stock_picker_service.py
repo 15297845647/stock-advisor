@@ -70,7 +70,11 @@ class StockPickerService:
             ma5 = tech.ma5 if tech else None
             result = yangjia_screener.screen(bars, code, candidate["price"], ma5, cfg)
             if result.passed:
-                winners.append({**candidate, "boards": result.consecutive_boards})
+                winners.append({
+                    **candidate,
+                    "boards": result.consecutive_boards,
+                    "vr": result.volume_ratio,
+                })
         return winners
 
     async def _add_to_watchlist(self, wechat_id: str, picks: list[dict]) -> None:
@@ -111,9 +115,11 @@ class StockPickerService:
             f"入选 {len(picks)} 只：",
         ]
         for i, p in enumerate(picks, 1):
+            vr = p.get("vr")
+            vr_text = f"量比{vr}" if vr is not None else "量比-"
             header.append(
                 f"  {i}. {p['name']}（{p['code']}）"
-                f" 现价{p['price']} 量比{p['volume_ratio']:.1f}"
+                f" 现价{p['price']} {vr_text}"
                 f" {p['boards']}连板"
             )
 
