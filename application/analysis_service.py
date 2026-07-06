@@ -19,6 +19,9 @@ from repository.stock_repository import StockRepository
 
 logger = logging.getLogger(__name__)
 
+# 深度分析当日缓存（进程内）：code -> (date, report)
+_deep_cache: dict[str, tuple] = {}
+
 
 class AnalysisService:
     def __init__(self):
@@ -106,9 +109,15 @@ class AnalysisService:
 
         return report_text
 
-    async def analyze_stock_deep(self, stock_code: str) -> str:
-        """深度分析 — 4分析师并行 → Bull/Bear 辩论 → 风控（耗时约 40s）"""
+    async def analyze_stock_deep(self, stock_code: str, force: bool = False) -> str:
+        """深度分析 — 4分析师并行 → Bull/Bear 辩论 → 裁决（耗时约 40s，当日缓存）"""
         from application.analyst_agents import AnalystPipeline
+
+        # 当日缓存：同股同天重复深度分析直接复用，避免重复跑 agent 管线
+        if not force:
+            cached = _deep_cache.get(stock_code)
+            if cached and cached[0] == date.today():
+                return cached[1]
 
         quote = await self.akshare.get_realtime_quote(stock_code)
         if not quote:
@@ -144,6 +153,7 @@ class AnalysisService:
         await self.report_repo.save_report(AnalysisReport(
             stock_code=stock_code, report_date=date.today(), content=report,
         ))
+        _deep_cache[stock_code] = (date.today(), report)
 
         return report
 

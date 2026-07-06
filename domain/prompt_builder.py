@@ -137,30 +137,6 @@ def build_recommend_prompt(
     )
 
 
-def build_position_strategy_prompt(
-    push_type: str,
-    risk_level: str,
-    trade_style: str,
-    position_summary: str,
-    market_overview: str,
-    technical_data: str,
-) -> str:
-    """构造持仓策略 prompt（开盘前/收盘后推送）"""
-    template = _load_template("position_strategy.txt")
-
-    risk_map = {"conservative": "保守型", "moderate": "稳健型", "aggressive": "激进型"}
-    style_map = {"day": "短线", "swing": "波段", "position": "中长线"}
-
-    return template.format(
-        push_type=push_type,
-        risk_level=risk_map.get(risk_level, risk_level),
-        trade_style=style_map.get(trade_style, trade_style),
-        position_summary=position_summary,
-        market_overview=market_overview,
-        technical_data=technical_data,
-    )
-
-
 def build_chat_prompt(ctx: UserContext, user_message: str) -> str:
     """构造对话 prompt（注入用户上下文）"""
     template = _load_template("chat.txt")

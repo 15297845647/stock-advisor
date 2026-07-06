@@ -49,9 +49,6 @@ async def dashboard():
         watch_count = (await conn.execute_fetchall("SELECT COUNT(*) as c FROM user_watchlist"))[0]["c"]
         report_count = (await conn.execute_fetchall("SELECT COUNT(*) as c FROM analysis_reports"))[0]["c"]
         chat_count = (await conn.execute_fetchall("SELECT COUNT(*) as c FROM chat_history"))[0]["c"]
-        position_count = (await conn.execute_fetchall(
-            "SELECT COUNT(*) as c FROM user_positions WHERE status='open'"
-        ))[0]["c"]
 
         today = date.today().isoformat()
         today_reports = (await conn.execute_fetchall(
@@ -73,7 +70,6 @@ async def dashboard():
     return {
         "users": user_count,
         "watchlist_items": watch_count,
-        "open_positions": position_count,
         "total_reports": report_count,
         "total_chats": chat_count,
         "today_reports": today_reports,
@@ -180,15 +176,10 @@ async def get_user_detail(wechat_id: str):
             "SELECT role, content, created_at FROM chat_history WHERE wechat_id = ? ORDER BY id DESC LIMIT 20",
             (wechat_id,),
         )
-        positions = await conn.execute_fetchall(
-            "SELECT * FROM user_positions WHERE wechat_id = ? AND status = 'open' ORDER BY open_date",
-            (wechat_id,),
-        )
         return {
             "profile": dict(user_rows[0]),
             "bot": dict(bot_rows[0]) if bot_rows else None,
             "watchlist": [dict(r) for r in watchlist],
-            "positions": [dict(r) for r in positions],
             "memories": [dict(r) for r in memories],
             "recent_chat": [dict(r) for r in reversed(list(recent_chat))],
         }

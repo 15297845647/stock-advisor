@@ -10,10 +10,12 @@ import logging
 from application.analysis_service import AnalysisService
 from application.config_service import ConfigService
 from domain.models.user_context import UserContext
+from domain.prompt_builder import build_system_prompt
 from domain.strategy import midlong_screener, yangjia_screener
 from domain.strategy.strategy_config import MidLongConfig, YangjiaConfig
-from domain.stock_analyzer import analyze_technical
+from domain.stock_analyzer import TechnicalSnapshot, analyze_technical
 from infrastructure.akshare_client import AKShareClient
+from infrastructure.minimax_client import MiniMaxClient
 from repository.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ class StockPickerService:
         self.analysis = AnalysisService()
         self.config_service = ConfigService()
         self.user_repo = UserRepository()
+        self.minimax = MiniMaxClient()
 
     async def pick(self, ctx: UserContext, wechat_id: str) -> str:
         """按用户交易风格分派到对应选股策略"""
@@ -67,10 +70,10 @@ class StockPickerService:
         if cfg.auto_watchlist:
             await self._add_to_watchlist(wechat_id, picks)
 
-        # 阶段C：Top N 深度分析（结论版）
-        deep_reports = await self._deep_analyze(picks)
+        # 阶段C：快速汇总（1次LLM，不跑完整agent管线）
+        verdicts = await self._quick_verdicts(picks, "养家短线")
 
-        return self._assemble(picks, deep_reports, cfg)
+        return self._assemble(picks, verdicts, cfg)
 
     async def _screen_pool(self, pool: list[dict], cfg: YangjiaConfig) -> list[dict]:
         """逐只候选拉K线，过养家规则，返回入选标的（保留量比排序）"""
@@ -93,6 +96,7 @@ class StockPickerService:
                     **candidate,
                     "boards": result.consecutive_boards,
                     "vr": result.volume_ratio,
+                    "signal": self._tech_signal(tech),
                 })
         return winners
 
@@ -104,15 +108,42 @@ class StockPickerService:
             except Exception as e:
                 logger.warning("加自选 %s 失败: %s", p["code"], e)
 
-    async def _deep_analyze(self, picks: list[dict]) -> list[str]:
-        """对入选标的逐只跑深度分析管线，跳过失败的"""
-        reports = []
+    async def _quick_verdicts(self, picks: list[dict], strategy_label: str) -> str:
+        """一次 LLM 汇总，为入选股各出一句话操作建议（不跑 agent 管线）"""
+        if not picks:
+            return ""
+
+        lines = []
         for p in picks:
-            try:
-                reports.append(await self.analysis.analyze_stock_deep(p["code"]))
-            except Exception as e:
-                logger.warning("深度分析 %s 失败: %s", p["code"], e)
-        return reports
+            lines.append(
+                f"{p['name']}（{p['code']}）现价{p['price']} "
+                f"涨跌{p['change_pct']:+.2f}% {p.get('signal', '')}"
+            )
+        data = "\n".join(lines)
+        prompt = (
+            f"以下是通过「{strategy_label}」策略筛选出的股票及技术面数据。"
+            f"请为每只股票用一句话给出操作建议（🟢买入/🟡持有/⚪观望 + 简要理由），"
+            f"每只一行，简洁不啰嗦：\n\n{data}"
+        )
+        try:
+            return await self.minimax.chat(
+                system_prompt=build_system_prompt(),
+                messages=[{"role": "user", "content": prompt}],
+            )
+        except Exception as e:
+            logger.warning("快速汇总 LLM 失败: %s", e)
+            return ""
+
+    @staticmethod
+    def _tech_signal(tech: TechnicalSnapshot | None) -> str:
+        """压缩技术面信号（供快速汇总）"""
+        if not tech:
+            return "技术数据不足"
+        return (
+            f"趋势{tech.trend} MA5/10/20={tech.ma5}/{tech.ma10}/{tech.ma20} "
+            f"RSI{tech.rsi_14:.0f} MACD柱{tech.macd_hist:+.3f} "
+            f"支撑{tech.support}/压力{tech.resistance}"
+        )
 
     @staticmethod
     def _no_match_message(cfg: YangjiaConfig) -> str:
@@ -123,8 +154,8 @@ class StockPickerService:
         )
 
     @staticmethod
-    def _assemble(picks: list[dict], deep_reports: list[str], cfg: YangjiaConfig) -> str:
-        """拼装最终报告：入选清单 + 深度分析 + 操作纪律"""
+    def _assemble(picks: list[dict], verdicts: str, cfg: YangjiaConfig) -> str:
+        """拼装报告：入选清单 + 快速建议 + 操作纪律"""
         sep = "\n\n" + "=" * 30 + "\n\n"
 
         header = [
@@ -143,16 +174,16 @@ class StockPickerService:
             )
 
         parts = ["\n".join(header)]
-        if deep_reports:
-            parts.append(sep + "入选标的深度分析：")
-            parts.extend(sep + r for r in deep_reports)
+        if verdicts:
+            parts.append(sep + "💡 快速建议：\n" + verdicts)
 
         discipline = sep + "\n".join([
             "📏 操作纪律：",
             f"1. {cfg.advice_rule3}",
             f"2. {cfg.advice_rule4}",
             f"3. {cfg.advice_rule5}",
-            "\n以上仅供参考，不构成投资建议，投资有风险，入市需谨慎。",
+            "\n如需某只详细分析，回复「深度分析 代码」。",
+            "以上仅供参考，不构成投资建议，投资有风险，入市需谨慎。",
         ])
         parts.append(discipline)
         return "\n".join(parts)
@@ -178,8 +209,8 @@ class StockPickerService:
         if cfg.auto_watchlist:
             await self._add_to_watchlist(wechat_id, picks)
 
-        deep_reports = await self._deep_analyze(picks)
-        return self._assemble_midlong(picks, deep_reports, cfg)
+        verdicts = await self._quick_verdicts(picks, "中长线趋势+基本面")
+        return self._assemble_midlong(picks, verdicts, cfg)
 
     async def _screen_pool_midlong(self, pool: list[dict], cfg: MidLongConfig) -> list[dict]:
         """逐只候选：先过技术面（便宜），通过再拉基本面校验"""
@@ -207,7 +238,11 @@ class StockPickerService:
 
             result = midlong_screener.screen_midlong(tech, fundamentals, cfg)
             if result.passed:
-                winners.append({**candidate, "fund": fundamentals})
+                winners.append({
+                    **candidate,
+                    "fund": fundamentals,
+                    "signal": self._tech_signal(tech),
+                })
         return winners
 
     @staticmethod
@@ -219,8 +254,8 @@ class StockPickerService:
         )
 
     @staticmethod
-    def _assemble_midlong(picks: list[dict], deep_reports: list[str], cfg: MidLongConfig) -> str:
-        """拼装中长线报告：入选清单 + 深度分析 + 操作纪律"""
+    def _assemble_midlong(picks: list[dict], verdicts: str, cfg: MidLongConfig) -> str:
+        """拼装中长线报告：入选清单 + 快速建议 + 操作纪律"""
         sep = "\n\n" + "=" * 30 + "\n\n"
 
         header = [
@@ -236,16 +271,16 @@ class StockPickerService:
             )
 
         parts = ["\n".join(header)]
-        if deep_reports:
-            parts.append(sep + "入选标的深度分析：")
-            parts.extend(sep + r for r in deep_reports)
+        if verdicts:
+            parts.append(sep + "💡 快速建议：\n" + verdicts)
 
         discipline = sep + "\n".join([
             "📏 操作纪律：",
             f"1. {cfg.advice_hold}",
             f"2. {cfg.advice_stop}",
             f"3. {cfg.advice_add}",
-            "\n以上仅供参考，不构成投资建议，投资有风险，入市需谨慎。",
+            "\n如需某只详细分析，回复「深度分析 代码」。",
+            "以上仅供参考，不构成投资建议，投资有风险，入市需谨慎。",
         ])
         parts.append(discipline)
         return "\n".join(parts)

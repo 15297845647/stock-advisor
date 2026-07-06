@@ -52,7 +52,8 @@ stock-advisor/
 │   ├── analysis_service.py         #   股票/期货分析编排
 │   ├── analyst_agents.py           #   多分析师并行管线（技术/基本面/新闻/资金）
 │   ├── debate_service.py           #   多空辩论 + 风控评估编排
-│   ├── position_service.py         #   持仓管理（录入/确认/查询）
+│   ├── stock_picker_service.py     #   选股编排（养家短线 / 中长线）
+│   ├── config_service.py           #   策略配置读写（多策略）
 │   ├── backtest_service.py         #   回测流程编排
 │   └── subscription_service.py     #   关注列表管理
 │
@@ -78,19 +79,18 @@ stock-advisor/
 │
 ├── repository/                     # 数据访问层
 │   ├── user_repository.py          #   用户/记忆/关注列表 CRUD
-│   ├── position_repository.py      #   持仓 CRUD
+│   ├── strategy_config_repository.py #   策略配置 CRUD
 │   ├── report_repository.py        #   分析报告存取
 │   └── stock_repository.py         #   行情缓存存取
 │
 ├── scheduler/                      # 定时任务
-│   └── daily_push.py               #   每日推送（09:00 持仓策略 / 15:30 分析报告）
+│   └── daily_push.py               #   每日推送（15:30 收盘自选分析）
 │
 ├── prompts/                        # Prompt 模板
-│   ├── system.txt                  #   系统人设（含持仓检测指令）
+│   ├── system.txt                  #   系统人设
 │   ├── analysis.txt                #   个股分析模板
 │   ├── recommend.txt               #   推荐模板
 │   ├── chat.txt                    #   自由对话模板
-│   ├── position_strategy.txt       #   持仓策略模板
 │   ├── debate_bull.txt             #   多头研究员
 │   ├── debate_bear.txt             #   空头研究员
 │   ├── debate_judge.txt            #   研究主管（裁决）

@@ -16,10 +16,6 @@ class Intent(Enum):
     RECOMMEND = auto()        # 推荐/选股
     SCREEN_STOCKS = auto()    # 条件筛选
     BACKTEST = auto()         # 回测历史建议
-    CLOSE_POSITION = auto()   # 卖出/平仓
-    SHOW_POSITIONS = auto()   # 查看持仓
-    CONFIRM = auto()          # 确认操作
-    CANCEL = auto()           # 取消操作
     FREE_CHAT = auto()        # 自由对话/闲聊
 
 
@@ -69,23 +65,6 @@ _FUTURES_NAMES = {
     "豆粕", "棕榈油", "焦煤", "焦炭",
     "甲醇", "PTA", "纯碱", "玻璃",
 }
-_CLOSE_POSITION_KW = {"卖出", "平仓", "清仓", "出了", "卖了", "减仓", "止盈", "止损"}
-_SHOW_POSITION_KW = {"持仓", "我的仓位", "仓位", "持有什么", "我买了什么", "看看持仓", "当前持仓"}
-_CONFIRM_KW = {"确认", "确定", "是的", "对的", "没错", "录入", "保存", "ok", "OK", "好的"}
-_CANCEL_KW = {"取消", "算了", "不要了", "不录了", "放弃"}
-
-# 匹配价格（仅用于 CLOSE_POSITION 提取卖出价）
-_PRICE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:元|块)")
-
-
-def _extract_price(text: str) -> float | None:
-    cleaned = _CODE_RE.sub("", text)
-    m = _PRICE_RE.search(cleaned)
-    if m:
-        val = float(m.group(1))
-        if 0.01 < val < 100000:
-            return val
-    return None
 
 
 def parse_intent(text: str) -> ParsedIntent:
@@ -121,23 +100,6 @@ def parse_intent(text: str) -> ParsedIntent:
     # 推荐选股
     if any(kw in text_lower for kw in _RECOMMEND_KW):
         return ParsedIntent(Intent.RECOMMEND, raw_text=text)
-
-    # 确认 / 取消（短消息才匹配，避免长句误触）
-    if len(text_lower) <= 10:
-        if any(kw in text_lower for kw in _CANCEL_KW):
-            return ParsedIntent(Intent.CANCEL, raw_text=text)
-        if any(kw in text_lower for kw in _CONFIRM_KW):
-            return ParsedIntent(Intent.CONFIRM, raw_text=text)
-
-    # 查看持仓
-    if any(kw in text_lower for kw in _SHOW_POSITION_KW):
-        return ParsedIntent(Intent.SHOW_POSITIONS, raw_text=text)
-
-    # 平仓/卖出（优先于建仓，因为"减仓"含"仓"）
-    if any(kw in text_lower for kw in _CLOSE_POSITION_KW):
-        code = _extract_code(text_lower)
-        price = _extract_price(text_lower)
-        return ParsedIntent(Intent.CLOSE_POSITION, stock_code=code, raw_text=text, price=price)
 
     # 期货分析
     is_futures = any(kw in text_lower for kw in _FUTURES_KW)
