@@ -349,7 +349,11 @@ def _col_val(row, *candidates, default=0):
 
 class AKShareClient:
 
-    # ── 个股日K（东财 → 腾讯 fallback）──
+    def __init__(self):
+        from infrastructure.tdx_client import TdxClient
+        self.tdx = TdxClient()
+
+    # ── 个股日K（东财 → 腾讯 → 通达信 fallback）──
 
     async def get_stock_history(self, code: str, days: int = 60) -> list[StockDailyBar]:
         end_date = date.today()
@@ -362,7 +366,13 @@ class AKShareClient:
 
         # 降级腾讯（缺涨跌幅，需手动算）
         logger.info("%s 东财日K失败，尝试腾讯源", code)
-        return await self._hist_from_tencent(code, start_date, end_date, days)
+        bars = await self._hist_from_tencent(code, start_date, end_date, days)
+        if bars:
+            return bars
+
+        # 再降级通达信 TCP 直连（协议独立，抗封）
+        logger.info("%s 腾讯日K失败，尝试通达信源", code)
+        return await self.tdx.get_daily_hist(code, days)
 
     async def _hist_from_eastmoney(self, code, start_date, end_date, days) -> list[StockDailyBar]:
         try:
@@ -465,6 +475,11 @@ class AKShareClient:
             )
         except Exception as e:
             logger.warning("实时行情获取失败(%s): %s", code, e)
+
+        # 通达信兜底（协议独立）
+        tdx_quote = await self.tdx.get_realtime_quote(code)
+        if tdx_quote:
+            return tdx_quote
         return await self._quote_from_daily(code)
 
     # ── 个股资金流向 ──

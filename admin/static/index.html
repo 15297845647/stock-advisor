@@ -115,9 +115,9 @@
                 <div>
                   <label class="text-sm text-gray-500 block mb-1">交易风格</label>
                   <select x-model="newUser.trade_style" class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                    <option value="day">日内</option>
-                    <option value="swing">波段</option>
-                    <option value="long">长线</option>
+                    <option value="day">日内（养家短线）</option>
+                    <option value="swing">波段（养家短线）</option>
+                    <option value="long">中长线</option>
                   </select>
                 </div>
                 <div>
@@ -199,9 +199,9 @@
                   </div>
                   <div><span class="text-gray-500 w-20 inline-block">交易风格</span>
                     <select x-model="editProfile.trade_style" class="border border-gray-200 rounded px-2 py-1">
-                      <option value="day">日内</option>
-                      <option value="swing">波段</option>
-                      <option value="long">长线</option>
+                      <option value="day">日内（养家短线）</option>
+                      <option value="swing">波段（养家短线）</option>
+                      <option value="long">中长线</option>
                     </select>
                   </div>
                   <button @click="saveProfile()" class="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 transition">保存</button>
@@ -488,6 +488,71 @@
               <span x-show="strategySaved" class="text-green-600 text-sm ml-2" x-text="strategyMsg"></span>
             </div>
           </div>
+
+          <p class="text-xs text-gray-400 mt-8 mb-4">中长线策略（用户交易风格为「中长线」时生效）：均线多头 + 趋势向上 + 基本面筛选。</p>
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-2xl">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="flex items-center gap-2">
+                <input type="checkbox" id="mlMaBull" x-model="midlongCfg.require_ma_bull" class="w-4 h-4">
+                <label for="mlMaBull" class="text-sm text-gray-500">要求均线多头排列</label>
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="checkbox" id="mlUptrend" x-model="midlongCfg.require_uptrend" class="w-4 h-4">
+                <label for="mlUptrend" class="text-sm text-gray-500">要求趋势向上</label>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">ROE 下限(%)</label>
+                <input type="number" step="0.1" x-model.number="midlongCfg.min_roe"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">PE 上限</label>
+                <input type="number" step="0.1" x-model.number="midlongCfg.max_pe"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">营收增长下限(%)</label>
+                <input type="number" step="0.1" x-model.number="midlongCfg.min_revenue_growth"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">候选池上限</label>
+                <input type="number" x-model.number="midlongCfg.candidate_cap"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">输出条数</label>
+                <input type="number" x-model.number="midlongCfg.output_count"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
+              <div class="flex items-center gap-2 pt-6">
+                <input type="checkbox" id="mlAutoWatch" x-model="midlongCfg.auto_watchlist" class="w-4 h-4">
+                <label for="mlAutoWatch" class="text-sm text-gray-500">入选自动加自选</label>
+              </div>
+            </div>
+            <hr class="border-gray-100 my-4">
+            <div class="space-y-3">
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">操作提示 1（持有纪律）</label>
+                <textarea x-model="midlongCfg.advice_hold" rows="2"
+                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"></textarea>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">操作提示 2（离场信号）</label>
+                <textarea x-model="midlongCfg.advice_stop" rows="2"
+                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"></textarea>
+              </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">操作提示 3（加仓时机）</label>
+                <textarea x-model="midlongCfg.advice_add" rows="2"
+                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"></textarea>
+              </div>
+            </div>
+            <div class="mt-5">
+              <button @click="saveMidlong()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存中长线策略</button>
+              <span x-show="midlongSaved" class="text-green-600 text-sm ml-2" x-text="midlongMsg"></span>
+            </div>
+          </div>
         </div>
 
         <div x-show="page==='config'" class="fade-in">
@@ -577,6 +642,11 @@ function admin() {
     strategySaved: false,
     strategyMsg: '',
 
+    // midlong strategy config
+    midlongCfg: {},
+    midlongSaved: false,
+    midlongMsg: '',
+
     menu: [
       { key: 'dashboard', label: '仪表盘' },
       { key: 'users', label: '用户管理' },
@@ -588,7 +658,7 @@ function admin() {
     async init() {
       this.menu[0].load = () => this.loadDashboard();
       this.menu[1].load = () => this.loadUsers();
-      this.menu[2].load = () => this.loadStrategy();
+      this.menu[2].load = () => { this.loadStrategy(); this.loadMidlong(); };
       this.menu[3].load = () => this.loadLogFiles();
       this.menu[4].load = () => this.loadConfig();
       if (this.token) await this.loadDashboard();
@@ -807,6 +877,18 @@ function admin() {
       const d = await this.api('/api/strategy-config', { method:'PUT', body:JSON.stringify(this.strategyCfg) });
       if (d && d.ok) { this.strategySaved = true; this.strategyMsg = '已保存，实时生效'; this.strategyCfg = d.config; }
       setTimeout(() => this.strategySaved = false, 3000);
+    },
+
+    // ── MidLong Strategy Config ──
+    async loadMidlong() {
+      const d = await this.api('/api/strategy-config/midlong');
+      if (d) this.midlongCfg = d;
+    },
+
+    async saveMidlong() {
+      const d = await this.api('/api/strategy-config/midlong', { method:'PUT', body:JSON.stringify(this.midlongCfg) });
+      if (d && d.ok) { this.midlongSaved = true; this.midlongMsg = '已保存，实时生效'; this.midlongCfg = d.config; }
+      setTimeout(() => this.midlongSaved = false, 3000);
     },
   }
 }

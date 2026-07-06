@@ -1,8 +1,8 @@
-"""养家选股编排 — 两阶段筛选 → Top N 串联技术分析 → 操作纪律拼装
+"""选股编排 — 按用户交易风格分派策略（养家短线 / 中长线）
 
-阶段A：全量行情按量比粗筛活跃候选池（1次请求）
-阶段B：候选逐只拉K线，过养家规则（涨停回溯+排除连板+站稳5日线）
-阶段C：入选 Top N 走深度分析管线（结论版），附操作纪律提示文本
+通用流程：候选池 → 逐只规则筛选 → Top N 深度分析(结论版) → 操作纪律拼装。
+- 养家短线：量比活跃池 + 涨停回溯/排连板/站稳5日线
+- 中长线：均线多头 + 趋势向上 + 基本面(ROE/PE/营收增长)
 """
 
 import logging
@@ -10,8 +10,8 @@ import logging
 from application.analysis_service import AnalysisService
 from application.config_service import ConfigService
 from domain.models.user_context import UserContext
-from domain.strategy import yangjia_screener
-from domain.strategy.strategy_config import YangjiaConfig
+from domain.strategy import midlong_screener, yangjia_screener
+from domain.strategy.strategy_config import MidLongConfig, YangjiaConfig
 from domain.stock_analyzer import analyze_technical
 from infrastructure.akshare_client import AKShareClient
 from repository.user_repository import UserRepository
@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 # 拉K线天数：覆盖回溯窗口同时满足技术指标计算（analyze_technical 需 >=10 根）
 _HISTORY_DAYS = 60
+
+# 交易风格 → 策略映射（day/swing 走养家短线，long/position 走中长线）
+_STYLE_STRATEGY = {
+    "day": "yangjia", "swing": "yangjia",
+    "long": "midlong", "position": "midlong",
+}
+
+
+def resolve_strategy(trade_style: str) -> str:
+    """按用户交易风格解析选股策略，未知风格默认养家短线"""
+    return _STYLE_STRATEGY.get(trade_style, "yangjia")
 
 
 class StockPickerService:
@@ -30,7 +41,15 @@ class StockPickerService:
         self.user_repo = UserRepository()
 
     async def pick(self, ctx: UserContext, wechat_id: str) -> str:
-        """养家策略选股主流程"""
+        """按用户交易风格分派到对应选股策略"""
+        strategy = resolve_strategy(ctx.profile.trade_style)
+        logger.info("用户 %s 交易风格=%s → 策略=%s", wechat_id, ctx.profile.trade_style, strategy)
+        if strategy == "midlong":
+            return await self._pick_midlong(wechat_id)
+        return await self._pick_yangjia(wechat_id)
+
+    async def _pick_yangjia(self, wechat_id: str) -> str:
+        """养家短线选股主流程"""
         cfg = await self.config_service.get_yangjia_config()
 
         # 阶段A：活跃候选池
@@ -137,3 +156,108 @@ class StockPickerService:
         ])
         parts.append(discipline)
         return "\n".join(parts)
+
+    # ── 中长线策略 ──
+
+    async def _pick_midlong(self, wechat_id: str) -> str:
+        """中长线选股主流程（均线趋势 + 基本面）"""
+        cfg = await self.config_service.get_midlong_config()
+
+        # 阶段A：候选池（中长线不打板，用活跃度做宽口径粗筛，量比阈值设0）
+        pool = await self.akshare.get_active_pool(min_volume_ratio=0.0, cap=cfg.candidate_cap)
+        if not pool:
+            return "暂时无法获取行情数据，请稍后再试。"
+
+        # 阶段B：技术面 + 基本面筛选
+        winners = await self._screen_pool_midlong(pool, cfg)
+        if not winners:
+            return self._no_match_message_midlong(cfg)
+
+        picks = winners[:cfg.output_count]
+
+        if cfg.auto_watchlist:
+            await self._add_to_watchlist(wechat_id, picks)
+
+        deep_reports = await self._deep_analyze(picks)
+        return self._assemble_midlong(picks, deep_reports, cfg)
+
+    async def _screen_pool_midlong(self, pool: list[dict], cfg: MidLongConfig) -> list[dict]:
+        """逐只候选：先过技术面（便宜），通过再拉基本面校验"""
+        winners = []
+        for candidate in pool:
+            code = candidate["code"]
+            try:
+                bars = await self.akshare.get_stock_history(code, days=_HISTORY_DAYS)
+            except Exception as e:
+                logger.warning("拉取 %s K线失败: %s", code, e)
+                continue
+            if not bars:
+                continue
+
+            tech = analyze_technical(bars)
+            tech_ok, _ = midlong_screener.screen_technical(tech, cfg)
+            if not tech_ok:
+                continue
+
+            try:
+                fundamentals = await self.akshare.get_fundamentals(code)
+            except Exception as e:
+                logger.warning("拉取 %s 基本面失败: %s", code, e)
+                fundamentals = None
+
+            result = midlong_screener.screen_midlong(tech, fundamentals, cfg)
+            if result.passed:
+                winners.append({**candidate, "fund": fundamentals})
+        return winners
+
+    @staticmethod
+    def _no_match_message_midlong(cfg: MidLongConfig) -> str:
+        return (
+            f"中长线选股：当前按「均线多头 + 趋势向上 + ROE≥{cfg.min_roe}% / "
+            f"0<PE≤{cfg.max_pe} / 营收增长≥{cfg.min_revenue_growth}%」未筛到合适标的，"
+            f"建议耐心等待趋势明朗。"
+        )
+
+    @staticmethod
+    def _assemble_midlong(picks: list[dict], deep_reports: list[str], cfg: MidLongConfig) -> str:
+        """拼装中长线报告：入选清单 + 深度分析 + 操作纪律"""
+        sep = "\n\n" + "=" * 30 + "\n\n"
+
+        header = [
+            "🎯 中长线选股（趋势 + 基本面）",
+            f"筛选：均线多头 + 趋势向上 + ROE≥{cfg.min_roe}% / 0<PE≤{cfg.max_pe} / "
+            f"营收增长≥{cfg.min_revenue_growth}%\n",
+            f"入选 {len(picks)} 只：",
+        ]
+        for i, p in enumerate(picks, 1):
+            header.append(
+                f"  {i}. {p['name']}（{p['code']}）现价{p['price']}"
+                f" 涨跌{p['change_pct']:+.2f}%{StockPickerService._fund_brief(p.get('fund'))}"
+            )
+
+        parts = ["\n".join(header)]
+        if deep_reports:
+            parts.append(sep + "入选标的深度分析：")
+            parts.extend(sep + r for r in deep_reports)
+
+        discipline = sep + "\n".join([
+            "📏 操作纪律：",
+            f"1. {cfg.advice_hold}",
+            f"2. {cfg.advice_stop}",
+            f"3. {cfg.advice_add}",
+            "\n以上仅供参考，不构成投资建议，投资有风险，入市需谨慎。",
+        ])
+        parts.append(discipline)
+        return "\n".join(parts)
+
+    @staticmethod
+    def _fund_brief(fund) -> str:
+        """基本面简述（ROE/PE），无数据返回空串"""
+        if not fund:
+            return ""
+        bits = []
+        if fund.roe is not None:
+            bits.append(f"ROE{fund.roe:.0f}%")
+        if fund.pe_ratio is not None:
+            bits.append(f"PE{fund.pe_ratio:.0f}")
+        return " " + " ".join(bits) if bits else ""

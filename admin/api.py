@@ -388,6 +388,39 @@ async def update_strategy_config(req: UpdateStrategyConfigRequest):
     return {"ok": True, "config": cfg.to_dict()}
 
 
+class UpdateMidLongConfigRequest(BaseModel):
+    require_ma_bull: bool | None = None
+    require_uptrend: bool | None = None
+    min_roe: float | None = None
+    max_pe: float | None = None
+    min_revenue_growth: float | None = None
+    candidate_cap: int | None = None
+    output_count: int | None = None
+    auto_watchlist: bool | None = None
+    advice_hold: str | None = None
+    advice_stop: str | None = None
+    advice_add: str | None = None
+
+
+@router.get("/strategy-config/midlong", dependencies=[Depends(verify_token)])
+async def get_midlong_config():
+    """读取中长线选股策略配置（缺字段以默认值补全）"""
+    from application.config_service import ConfigService
+
+    cfg = await ConfigService().get_midlong_config()
+    return cfg.to_dict()
+
+
+@router.put("/strategy-config/midlong", dependencies=[Depends(verify_token)])
+async def update_midlong_config(req: UpdateMidLongConfigRequest):
+    """更新中长线选股策略配置，立即生效"""
+    from application.config_service import ConfigService
+
+    data = {k: v for k, v in req.model_dump().items() if v is not None}
+    cfg = await ConfigService().save_midlong_config(data)
+    return {"ok": True, "config": cfg.to_dict()}
+
+
 # ────────────────────── 日志查看 ──────────────────────
 
 
