@@ -6,6 +6,7 @@
 """
 
 import logging
+from datetime import date
 
 from application.analysis_service import AnalysisService
 from application.config_service import ConfigService
@@ -35,6 +36,10 @@ def resolve_strategy(trade_style: str) -> str:
     return _STYLE_STRATEGY.get(trade_style, "yangjia")
 
 
+# 每用户今日已推荐代码，支持"再推一批"去重：wechat_id -> (date, [codes])
+_recent_picks: dict[str, tuple] = {}
+
+
 class StockPickerService:
     def __init__(self):
         self.akshare = AKShareClient()
@@ -43,15 +48,31 @@ class StockPickerService:
         self.user_repo = UserRepository()
         self.minimax = MiniMaxClient()
 
-    async def pick(self, ctx: UserContext, wechat_id: str) -> str:
-        """按用户交易风格分派到对应选股策略"""
+    async def pick(self, ctx: UserContext, wechat_id: str, count: int | None = None) -> str:
+        """按用户交易风格分派到对应选股策略；count 为本次期望条数"""
         strategy = resolve_strategy(ctx.profile.trade_style)
         logger.info("用户 %s 交易风格=%s → 策略=%s", wechat_id, ctx.profile.trade_style, strategy)
         if strategy == "midlong":
-            return await self._pick_midlong(wechat_id)
-        return await self._pick_yangjia(wechat_id)
+            return await self._pick_midlong(wechat_id, count)
+        return await self._pick_yangjia(wechat_id, count)
 
-    async def _pick_yangjia(self, wechat_id: str) -> str:
+    def _select_new_picks(self, wechat_id: str, winners: list[dict], count: int) -> list[dict]:
+        """排除今日已推荐的标的，取下一批；全部推完则重置从头循环"""
+        today = date.today()
+        rec = _recent_picks.get(wechat_id)
+        shown = list(rec[1]) if rec and rec[0] == today else []
+
+        fresh = [w for w in winners if w["code"] not in shown]
+        if not fresh:  # 已轮完一遍，重置重新推
+            shown = []
+            fresh = winners
+
+        picks = fresh[:count]
+        shown.extend(p["code"] for p in picks)
+        _recent_picks[wechat_id] = (today, shown)
+        return picks
+
+    async def _pick_yangjia(self, wechat_id: str, count: int | None = None) -> str:
         """养家短线选股主流程"""
         cfg = await self.config_service.get_yangjia_config()
 
@@ -65,7 +86,7 @@ class StockPickerService:
         if not winners:
             return self._no_match_message(cfg)
 
-        picks = winners[:cfg.output_count]
+        picks = self._select_new_picks(wechat_id, winners, count or cfg.output_count)
 
         if cfg.auto_watchlist:
             await self._add_to_watchlist(wechat_id, picks)
@@ -190,7 +211,7 @@ class StockPickerService:
 
     # ── 中长线策略 ──
 
-    async def _pick_midlong(self, wechat_id: str) -> str:
+    async def _pick_midlong(self, wechat_id: str, count: int | None = None) -> str:
         """中长线选股主流程（均线趋势 + 基本面）"""
         cfg = await self.config_service.get_midlong_config()
 
@@ -204,7 +225,7 @@ class StockPickerService:
         if not winners:
             return self._no_match_message_midlong(cfg)
 
-        picks = winners[:cfg.output_count]
+        picks = self._select_new_picks(wechat_id, winners, count or cfg.output_count)
 
         if cfg.auto_watchlist:
             await self._add_to_watchlist(wechat_id, picks)

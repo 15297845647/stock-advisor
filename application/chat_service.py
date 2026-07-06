@@ -3,9 +3,10 @@
 import logging
 
 from application.analysis_service import AnalysisService
+from application.intent_service import IntentService
 from application.stock_picker_service import StockPickerService
 from application.subscription_service import SubscriptionService
-from domain.intent_parser import Intent, parse_intent
+from domain.intent_parser import Intent
 from domain.models.user_context import UserContext
 from domain.prompt_builder import build_chat_prompt, build_system_prompt
 from infrastructure.akshare_client import AKShareClient
@@ -13,6 +14,24 @@ from infrastructure.minimax_client import MiniMaxClient
 from repository.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
+
+# 中文数字 → 阿拉伯数字（用于解析"再推两个"）
+_CN_NUM = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def _parse_count(message: str) -> int | None:
+    """从消息中解析期望推荐条数，如"再推两个""推荐3只"，无则返回 None"""
+    import re
+
+    m = re.search(r"(\d+)\s*(?:只|个|支|条)?", message)
+    if m:
+        n = int(m.group(1))
+        return n if 1 <= n <= 20 else None
+    for cn, num in _CN_NUM.items():
+        if cn in message:
+            return num
+    return None
 
 
 class ChatService:
@@ -23,12 +42,14 @@ class ChatService:
         self.user_repo = UserRepository()
         self.akshare = AKShareClient()
         self.picker = StockPickerService()
+        self.intent_service = IntentService()
 
     async def handle(self, wechat_id: str, message: str, ctx: UserContext) -> str:
         await self.user_repo.append_chat(wechat_id, "user", message)
 
-        parsed = parse_intent(message)
-        logger.info("用户 %s 意图: %s, 代码: %s", wechat_id, parsed.intent, parsed.stock_code)
+        parsed = await self.intent_service.parse(message, ctx.recent_chat)
+        logger.info("用户 %s 意图: %s, 代码: %s, 数量: %s",
+                    wechat_id, parsed.intent, parsed.stock_code, parsed.count)
 
         try:
             response = await self._dispatch(wechat_id, parsed, ctx, message)
@@ -65,7 +86,7 @@ class ChatService:
                 return await BacktestService().run_backtest(days=30)
 
             case Intent.RECOMMEND:
-                return await self.picker.pick(ctx, wechat_id)
+                return await self.picker.pick(ctx, wechat_id, parsed.count or _parse_count(message))
 
             case Intent.SCREEN_STOCKS:
                 return await self._handle_screen(parsed.raw_text)

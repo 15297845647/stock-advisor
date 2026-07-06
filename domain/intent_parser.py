@@ -25,6 +25,7 @@ class ParsedIntent:
     stock_code: str | None = None
     raw_text: str = ""
     price: float | None = None
+    count: int | None = None   # 期望条数（如"再推两个"）
 
 
 # 6位数字股票代码

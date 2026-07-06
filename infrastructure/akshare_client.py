@@ -160,6 +160,13 @@ def _load_spot_disk(max_age_hours: int = _SPOT_DISK_MAX_AGE_HOURS):
         return None
 
 
+# 个股日K / 基本面 内存 TTL 缓存（选股筛选逐只拉数据时复用）
+_hist_cache: dict[str, tuple[float, list]] = {}
+_HIST_CACHE_TTL = 600          # 日K缓存 10 分钟（盘中日线变化不大，选股足够）
+_fund_cache: dict[str, tuple[float, object]] = {}
+_FUND_CACHE_TTL = 6 * 3600     # 基本面缓存 6 小时（财务变动慢）
+
+
 # 东财全量行情 HTTP 直连（绕开 akshare spot_em 不跟随 302 跳转的问题）
 # 东财已将 push2 重定向至 push2delay，旧版 akshare 不跟随导致连接被断。
 _EM_SPOT_URL = "https://push2delay.eastmoney.com/api/qt/clist/get"
@@ -353,9 +360,22 @@ class AKShareClient:
         from infrastructure.tdx_client import TdxClient
         self.tdx = TdxClient()
 
-    # ── 个股日K（东财 → 腾讯 → 通达信 fallback）──
+    # ── 个股日K（内存缓存 → 东财 → 腾讯 → 通达信 fallback）──
 
     async def get_stock_history(self, code: str, days: int = 60) -> list[StockDailyBar]:
+        """带 10 分钟内存缓存，避免选股筛选逐只重复拉K线"""
+        key = f"{code}:{days}"
+        now = time.monotonic()
+        cached = _hist_cache.get(key)
+        if cached and (now - cached[0]) < _HIST_CACHE_TTL:
+            return cached[1]
+
+        bars = await self._fetch_stock_history(code, days)
+        if bars:
+            _hist_cache[key] = (now, bars)
+        return bars
+
+    async def _fetch_stock_history(self, code: str, days: int = 60) -> list[StockDailyBar]:
         end_date = date.today()
         start_date = end_date - timedelta(days=days + 30)
 
@@ -764,6 +784,18 @@ class AKShareClient:
     # ── 个股基本面（东财 + 新浪财务摘要）──
 
     async def get_fundamentals(self, code: str) -> 'StockFundamental | None':
+        """带 6 小时内存缓存，避免中长线选股逐只重复拉基本面"""
+        now = time.monotonic()
+        cached = _fund_cache.get(code)
+        if cached and (now - cached[0]) < _FUND_CACHE_TTL:
+            return cached[1]
+
+        result = await self._fetch_fundamentals(code)
+        if result is not None:
+            _fund_cache[code] = (now, result)
+        return result
+
+    async def _fetch_fundamentals(self, code: str) -> 'StockFundamental | None':
         """获取个股基本面数据：stock_individual_info_em + stock_financial_abstract"""
         from domain.models.stock import StockFundamental
 
