@@ -22,15 +22,16 @@ class MiniMaxClient:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
-        self.client = httpx.AsyncClient(timeout=90)
+        self.client = httpx.AsyncClient(timeout=180)
 
     async def chat(
         self,
         system_prompt: str,
         messages: list[dict],
         max_tokens: int = 4096,
+        retries: int = 1,
     ) -> str:
-        """发送对话请求，返回文本响应"""
+        """发送对话请求，返回文本响应。超时自动重试 retries 次。"""
         payload = {
             "model": self.model,
             "max_tokens": max_tokens,
@@ -38,16 +39,24 @@ class MiniMaxClient:
             "messages": messages,
             "tool_choice": {"type": "none"},
         }
-        try:
-            resp = await self.client.post(
-                self.base_url, headers=self.headers, json=payload
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return self._extract_response_text(data)
-        except httpx.HTTPStatusError as e:
-            logger.error("MiniMax API HTTP error: %s — %s", e.response.status_code, e.response.text)
-            raise
+        last_err = None
+        for attempt in range(retries + 1):
+            try:
+                resp = await self.client.post(
+                    self.base_url, headers=self.headers, json=payload
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return self._extract_response_text(data)
+            except httpx.ReadTimeout as e:
+                last_err = e
+                if attempt < retries:
+                    logger.warning("MiniMax 超时(第%d次)，重试中...", attempt + 1)
+                    continue
+            except httpx.HTTPStatusError as e:
+                logger.error("MiniMax API HTTP error: %s — %s", e.response.status_code, e.response.text)
+                raise
+        raise last_err  # type: ignore[misc]
 
     @staticmethod
     def _extract_response_text(data: dict) -> str:
