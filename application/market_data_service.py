@@ -1,0 +1,77 @@
+"""市场数据服务 — 准备 LLM 所需的市场快照上下文
+
+将全量行情缓存格式化为 prompt 友好的文本，供统一对话使用。
+数据依赖 AKShareClient 的 60s 内存缓存，本层不重复缓存。
+"""
+
+import logging
+
+from domain.models.user_context import UserContext
+from infrastructure.akshare_client import AKShareClient
+
+logger = logging.getLogger(__name__)
+
+_RISK_MAP = {"conservative": "保守型", "moderate": "稳健型", "aggressive": "激进型"}
+_STYLE_MAP = {"day": "短线/打板", "swing": "波段", "position": "中长线", "long": "中长线"}
+
+
+class MarketDataService:
+    def __init__(self):
+        self.akshare = AKShareClient()
+
+    async def build_market_context(self, ctx: UserContext) -> str:
+        """组装用户画像 + 市场快照，作为 LLM user message 的前缀上下文"""
+        parts = []
+
+        parts.append(self._format_user_profile(ctx))
+
+        market_snapshot = await self._get_market_snapshot()
+        if market_snapshot:
+            parts.append(market_snapshot)
+
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _format_user_profile(ctx: UserContext) -> str:
+        """格式化用户画像"""
+        risk = _RISK_MAP.get(ctx.profile.risk_level, ctx.profile.risk_level)
+        style = _STYLE_MAP.get(ctx.profile.trade_style, ctx.profile.trade_style)
+
+        lines = [
+            "【用户画像】",
+            f"- 风险偏好：{risk}",
+            f"- 交易风格：{style}",
+        ]
+
+        if ctx.watchlist:
+            lines.append(f"- 自选股：{', '.join(ctx.watchlist)}")
+
+        if ctx.memories:
+            lines.append("- 记忆：" + "；".join(ctx.memories[:5]))
+
+        return "\n".join(lines)
+
+    async def _get_market_snapshot(self) -> str | None:
+        """获取市场快照：Top50 活跃股 + 基本指标"""
+        try:
+            pool = await self.akshare.get_active_pool(min_volume_ratio=0.0, cap=50)
+        except Exception as e:
+            logger.warning("获取市场快照失败: %s", e)
+            return None
+
+        if not pool:
+            return None
+
+        lines = ["【实时市场数据】（今日活跃股 Top50，按涨幅排序）"]
+        lines.append("代码 | 名称 | 现价 | 涨跌% | 量比 | 换手%")
+        lines.append("-" * 50)
+
+        for s in pool:
+            vr = f"{s['volume_ratio']:.1f}" if s.get("volume_ratio") else "-"
+            tr = f"{s['turnover']:.1f}" if s.get("turnover") else "-"
+            lines.append(
+                f"{s['code']} | {s['name']} | {s['price']} | "
+                f"{s['change_pct']:+.2f}% | {vr} | {tr}"
+            )
+
+        return "\n".join(lines)

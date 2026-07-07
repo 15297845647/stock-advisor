@@ -1,37 +1,32 @@
-"""对话编排 — 意图识别 → 路由 → 返回结果"""
+"""对话编排 — 统一 LLM 对话（去掉意图分类层）
+
+流程：
+1. 快速关键词检测明确动作（关注/取消/自选/大盘）→ 直接执行
+2. 其余全部走单次 LLM 对话（注入市场数据 + 用户画像）
+3. 解析 LLM 输出中的动作标记并执行副作用
+"""
 
 import logging
+import re
 
 from application.analysis_service import AnalysisService
-from application.intent_service import IntentService
-from application.stock_picker_service import StockPickerService
+from application.market_data_service import MarketDataService
 from application.subscription_service import SubscriptionService
-from domain.intent_parser import Intent
+from domain.action_parser import extract_actions
 from domain.models.user_context import UserContext
-from domain.prompt_builder import build_chat_prompt, build_system_prompt
-from infrastructure.akshare_client import AKShareClient
+from domain.prompt_builder import _load_template
 from infrastructure.minimax_client import MiniMaxClient
 from repository.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
 
-# 中文数字 → 阿拉伯数字（用于解析"再推两个"）
-_CN_NUM = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
-           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-
-
-def _parse_count(message: str) -> int | None:
-    """从消息中解析期望推荐条数，如"再推两个""推荐3只"，无则返回 None"""
-    import re
-
-    m = re.search(r"(\d+)\s*(?:只|个|支|条)?", message)
-    if m:
-        n = int(m.group(1))
-        return n if 1 <= n <= 20 else None
-    for cn, num in _CN_NUM.items():
-        if cn in message:
-            return num
-    return None
+# 关键词快速路由（不需要 LLM，秒响应）
+_SUBSCRIBE_RE = re.compile(r"(?:关注|加自选|加入自选|订阅)\s*(\d{6})")
+_UNSUBSCRIBE_RE = re.compile(r"(?:取消关注|删除自选|移除自选|退订)\s*(\d{6})")
+_WATCHLIST_KW = {"自选股", "关注列表", "我的自选", "看看自选", "自选"}
+_MARKET_KW = {"大盘", "市场概览", "三大指数", "大盘怎么样", "今天行情"}
+_DEEP_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*(\d{6})")
+_BACKTEST_KW = {"回测", "胜率", "历史准确率"}
 
 
 class ChatService:
@@ -40,149 +35,103 @@ class ChatService:
         self.subscription = SubscriptionService()
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
-        self.akshare = AKShareClient()
-        self.picker = StockPickerService()
-        self.intent_service = IntentService()
+        self.market_data = MarketDataService()
 
     async def handle(self, wechat_id: str, message: str, ctx: UserContext) -> str:
+        """主入口：快速路由 or LLM 对话"""
         await self.user_repo.append_chat(wechat_id, "user", message)
 
-        parsed = await self.intent_service.parse(message, ctx.recent_chat)
-        logger.info("用户 %s 意图: %s, 代码: %s, 数量: %s",
-                    wechat_id, parsed.intent, parsed.stock_code, parsed.count)
+        # 快速路由：明确动作关键词直接执行，不走 LLM
+        quick = await self._try_quick_route(wechat_id, message)
+        if quick is not None:
+            await self.user_repo.append_chat(wechat_id, "assistant", quick)
+            return quick
 
+        # 统一 LLM 对话
         try:
-            response = await self._dispatch(wechat_id, parsed, ctx, message)
+            response = await self._unified_chat(wechat_id, message, ctx)
         except Exception as e:
-            logger.exception("dispatch error for intent %s", parsed.intent)
-            response = f"功能暂时不可用，请稍后再试。（{type(e).__name__}: {e}）"
+            logger.exception("unified_chat error")
+            response = f"服务暂时不可用，请稍后再试。（{type(e).__name__}）"
 
         await self.user_repo.append_chat(wechat_id, "assistant", response)
         return response
 
-    async def _dispatch(self, wechat_id, parsed, ctx, message) -> str:
-        match parsed.intent:
-            case Intent.ANALYZE_STOCK:
-                return await self._handle_analyze(parsed.stock_code, ctx, message)
+    async def _try_quick_route(self, wechat_id: str, message: str) -> str | None:
+        """关键词快速路由，匹配则直接返回结果，不匹配返回 None"""
+        msg = message.strip()
 
-            case Intent.SUBSCRIBE:
-                if not parsed.stock_code:
-                    return "请提供股票代码，如「关注 000001」。"
-                return await self.subscription.subscribe(wechat_id, parsed.stock_code)
+        # 关注
+        m = _SUBSCRIBE_RE.search(msg)
+        if m:
+            return await self.subscription.subscribe(wechat_id, m.group(1))
 
-            case Intent.UNSUBSCRIBE:
-                if not parsed.stock_code:
-                    return "请提供股票代码，如「取消关注 000001」。"
-                return await self.subscription.unsubscribe(wechat_id, parsed.stock_code)
+        # 取消关注
+        m = _UNSUBSCRIBE_RE.search(msg)
+        if m:
+            return await self.subscription.unsubscribe(wechat_id, m.group(1))
 
-            case Intent.SHOW_WATCHLIST:
-                return await self.subscription.show_watchlist(wechat_id)
+        # 自选列表
+        if any(kw in msg for kw in _WATCHLIST_KW):
+            return await self.subscription.show_watchlist(wechat_id)
 
-            case Intent.MARKET_OVERVIEW:
-                return await self.analysis.get_market_overview()
+        # 大盘概览
+        if any(kw in msg for kw in _MARKET_KW):
+            return await self.analysis.get_market_overview()
 
-            case Intent.BACKTEST:
-                from application.backtest_service import BacktestService
-                return await BacktestService().run_backtest(days=30)
+        # 深度分析
+        m = _DEEP_RE.search(msg)
+        if m:
+            return await self.analysis.analyze_stock_deep(m.group(1))
 
-            case Intent.RECOMMEND:
-                return await self.picker.pick(ctx, wechat_id, parsed.count or _parse_count(message))
+        # 回测
+        if any(kw in msg for kw in _BACKTEST_KW):
+            from application.backtest_service import BacktestService
+            return await BacktestService().run_backtest(days=30)
 
-            case Intent.SCREEN_STOCKS:
-                return await self._handle_screen(parsed.raw_text)
+        return None
 
-            case Intent.ANALYZE_STOCK_DEEP:
-                if not parsed.stock_code:
-                    return "请提供股票代码，如「深度分析 600519」。"
-                return await self.analysis.analyze_stock_deep(parsed.stock_code)
+    async def _unified_chat(self, wechat_id: str, message: str, ctx: UserContext) -> str:
+        """单次 LLM 调用：注入市场上下文 + 用户画像，由 LLM 理解语意并回复"""
+        system_prompt = _load_template("unified.txt")
 
-            case Intent.ANALYZE_FUTURES:
-                return await self.analysis.analyze_futures(parsed.raw_text)
-
-            case _:
-                # FREE_CHAT → 通用对话
-                return await self._call_chat(ctx, message)
-
-    async def _call_chat(self, ctx: UserContext, message: str) -> str:
-        """调用 MiniMax 通用对话"""
-        system = build_system_prompt()
-        user_prompt = build_chat_prompt(ctx, message)
+        # 构建 user 消息：市场上下文 + 对话历史 + 当前问题
+        market_context = await self.market_data.build_market_context(ctx)
 
         messages = []
-        for msg in ctx.recent_chat:
+        for msg in ctx.recent_chat[-6:]:
             messages.append({"role": msg.role, "content": msg.content})
-        messages.append({"role": "user", "content": user_prompt})
 
-        return await self.minimax.chat(system_prompt=system, messages=messages)
+        user_content = f"{market_context}\n\n【用户消息】\n{message}"
+        messages.append({"role": "user", "content": user_content})
 
-    # ── 其他处理 ──
+        raw = await self.minimax.chat(
+            system_prompt=system_prompt,
+            messages=messages,
+        )
 
-    async def _handle_analyze(self, stock_code: str | None, ctx: UserContext, message: str) -> str:
-        if not stock_code:
-            return await self._call_chat(ctx, message)
-        return await self.analysis.analyze_stock(stock_code)
+        # 解析动作标记并执行副作用
+        clean_text, actions = extract_actions(raw)
+        await self._execute_actions(wechat_id, actions)
 
-    async def _handle_screen(self, text: str) -> str:
-        """条件筛选 — 从预设策略或涨幅榜里跑筛选"""
-        from domain.stock_screener import PRESET_STRATEGIES, get_preset_names
-        from domain.stock_analyzer import analyze_technical
+        return clean_text
 
-        # 匹配预设策略
-        matched_strategy = None
-        for name in get_preset_names():
-            if name in text:
-                matched_strategy = name
-                break
-
-        if not matched_strategy:
-            presets = "、".join(get_preset_names())
-            return f"支持以下筛选策略：{presets}\n\n示例：「金叉选股」「超跌反弹」「强势突破」「均线多头」"
-
-        strategy = PRESET_STRATEGIES[matched_strategy]
-        conditions = strategy["conditions"]
-
-        # 从涨幅榜取样本股
-        rank_data = await self.akshare.get_stock_rank_list(count=50)
-        if not rank_data:
-            return "暂时无法获取行情数据。"
-
-        from domain.stock_screener import evaluate_all
-
-        results = []
-        for stock in rank_data[:30]:
-            code = stock["code"]
-            bars = await self.akshare.get_stock_history(code, days=30)
-            if len(bars) < 2:
-                continue
-
-            tech = analyze_technical(bars)
-            if not tech:
-                continue
-
-            indicators = {
-                "ma5": tech.ma5, "ma10": tech.ma10, "ma20": tech.ma20,
-                "macd_hist": tech.macd_hist, "rsi_14": tech.rsi_14,
-                "change_pct": stock["change_pct"],
-                "price_above_ma20": 1 if bars[-1].close > tech.ma20 else 0,
-                "volume_ratio": bars[-1].volume / max(
-                    sum(b.volume for b in bars[-6:-1]) / 5, 1
-                ) if len(bars) >= 6 else 1,
-            }
-            prev_indicators = {
-                "ma5": tech.ma5, "ma10": tech.ma10, "ma20": tech.ma20,
-            }
-
-            if evaluate_all(conditions, indicators, prev_indicators):
-                results.append(
-                    f"  {stock['name']}（{code}）"
-                    f"  价格{stock['price']}  涨跌{stock['change_pct']:+.2f}%"
-                    f"  RSI={tech.rsi_14:.0f}"
-                )
-
-        if not results:
-            return f"「{matched_strategy}」未筛到符合条件的股票，可能当前市场环境不适合该策略。"
-
-        header = f"📋 {matched_strategy}（{strategy['name']}）筛选结果：\n"
-        footer = "\n\n回复股票代码可查看详细分析。\n以上仅供参考，不构成投资建议。"
-        return header + "\n".join(results[:10]) + footer
-
+    async def _execute_actions(self, wechat_id: str, actions) -> None:
+        """执行 LLM 输出中的动作标记"""
+        for act in actions:
+            try:
+                match act.action:
+                    case "SUBSCRIBE":
+                        if act.code:
+                            await self.subscription.subscribe(
+                                wechat_id, act.code
+                            )
+                            logger.info("LLM触发加自选: %s %s", act.code, act.name)
+                    case "UNSUBSCRIBE":
+                        if act.code:
+                            await self.subscription.unsubscribe(wechat_id, act.code)
+                            logger.info("LLM触发取消自选: %s", act.code)
+                    case "DEEP_ANALYZE":
+                        pass  # 深度分析需要时间，不在当前回复中执行
+            except Exception as e:
+                logger.warning("执行动作 %s 失败: %s", act.action, e)
