@@ -62,8 +62,8 @@
           <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
             <h3 class="font-medium mb-3">系统信息</h3>
             <div class="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
-              <span class="text-gray-500">MiniMax 模型</span><span x-text="dash.minimax_model||'-'"></span>
-              <span class="text-gray-500">API Key 已设置</span><span x-text="dash.minimax_key_set?'是':'否'"></span>
+              <span class="text-gray-500">LLM 模型</span><span x-text="dash.llm_model||'-'"></span>
+              <span class="text-gray-500">API Key 已设置</span><span x-text="dash.llm_key_set?'是':'否'"></span>
               <span class="text-gray-500">数据库大小</span><span x-text="(dash.db_size_mb||0)+' MB'"></span>
               <span class="text-gray-500">最后活动时间</span><span x-text="dash.last_activity||'无'"></span>
             </div>
@@ -538,18 +538,18 @@
           <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg">
             <div class="space-y-4">
               <div>
-                <label class="text-sm text-gray-500 block mb-1">MiniMax API Key</label>
-                <input type="text" x-model="cfg.minimax_api_key" placeholder="当前值（脱敏）"
+                <label class="text-sm text-gray-500 block mb-1">LLM API Key</label>
+                <input type="text" x-model="cfg.llm_api_key" placeholder="当前值（脱敏）"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
               <div>
-                <label class="text-sm text-gray-500 block mb-1">MiniMax Base URL</label>
-                <input type="text" x-model="cfg.minimax_base_url"
+                <label class="text-sm text-gray-500 block mb-1">LLM Base URL</label>
+                <input type="text" x-model="cfg.llm_base_url"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
               <div>
-                <label class="text-sm text-gray-500 block mb-1">MiniMax Model</label>
-                <input type="text" x-model="cfg.minimax_model"
+                <label class="text-sm text-gray-500 block mb-1">LLM Model</label>
+                <input type="text" x-model="cfg.llm_model"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
               <hr class="border-gray-100">
@@ -834,10 +834,10 @@ function admin() {
 
     async saveConfig() {
       const body = {};
-      if (this.cfg.minimax_api_key && !this.cfg.minimax_api_key.includes('****'))
-        body.minimax_api_key = this.cfg.minimax_api_key;
-      if (this.cfg.minimax_base_url) body.minimax_base_url = this.cfg.minimax_base_url;
-      if (this.cfg.minimax_model) body.minimax_model = this.cfg.minimax_model;
+      if (this.cfg.llm_api_key && !this.cfg.llm_api_key.includes('****'))
+        body.llm_api_key = this.cfg.llm_api_key;
+      if (this.cfg.llm_base_url) body.llm_base_url = this.cfg.llm_base_url;
+      if (this.cfg.llm_model) body.llm_model = this.cfg.llm_model;
       if (this.newPassword) body.admin_password = this.newPassword;
 
       const d = await this.api('/api/config', { method:'PUT', body:JSON.stringify(body) });

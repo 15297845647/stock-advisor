@@ -13,9 +13,8 @@ from agent.config import (
     ADMIN_PASSWORD,
     DB_PATH,
     ENV_FILE_PATH,
-    MINIMAX_API_KEY,
-    MINIMAX_BASE_URL,
-    MINIMAX_MODEL,
+    get_llm_config,
+    update_llm_config,
 )
 from infrastructure.database import get_connection
 
@@ -76,8 +75,8 @@ async def dashboard():
         "today_chats": today_chats,
         "last_activity": last_active,
         "db_size_mb": round(db_size_bytes / 1048576, 2),
-        "minimax_model": MINIMAX_MODEL,
-        "minimax_key_set": bool(MINIMAX_API_KEY),
+        "llm_model": get_llm_config()["model"],
+        "llm_key_set": bool(get_llm_config()["api_key"]),
     }
 
 
@@ -309,40 +308,49 @@ async def api_restart_cc():
 
 @router.get("/config", dependencies=[Depends(verify_token)])
 async def get_config():
-    """读取当前配置（脱敏）"""
+    """读取当前 LLM 配置（脱敏）"""
+    cfg = get_llm_config()
     return {
-        "minimax_api_key": _mask_key(MINIMAX_API_KEY),
-        "minimax_base_url": MINIMAX_BASE_URL,
-        "minimax_model": MINIMAX_MODEL,
+        "llm_api_key": _mask_key(cfg["api_key"]),
+        "llm_base_url": cfg["base_url"],
+        "llm_model": cfg["model"],
         "db_path": DB_PATH,
         "admin_port": int(os.getenv("ADMIN_PORT", "8900")),
     }
 
 
 class UpdateConfigRequest(BaseModel):
-    minimax_api_key: str | None = None
-    minimax_base_url: str | None = None
-    minimax_model: str | None = None
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
     admin_password: str | None = None
 
 
 @router.put("/config", dependencies=[Depends(verify_token)])
 async def update_config(req: UpdateConfigRequest):
-    """修改 .env 文件中的配置项（需重启生效）"""
+    """修改 LLM 配置，立即热生效 + 持久化到 .env"""
     env_path = ENV_FILE_PATH
     env_map = _read_env_file(env_path)
 
-    if req.minimax_api_key:
-        env_map["MINIMAX_API_KEY"] = req.minimax_api_key
-    if req.minimax_base_url:
-        env_map["MINIMAX_BASE_URL"] = req.minimax_base_url
-    if req.minimax_model:
-        env_map["MINIMAX_MODEL"] = req.minimax_model
+    if req.llm_api_key:
+        env_map["LLM_API_KEY"] = req.llm_api_key
+    if req.llm_base_url:
+        env_map["LLM_BASE_URL"] = req.llm_base_url
+    if req.llm_model:
+        env_map["LLM_MODEL"] = req.llm_model
     if req.admin_password:
         env_map["ADMIN_PASSWORD"] = req.admin_password
 
     _write_env_file(env_path, env_map)
-    return {"ok": True, "message": "配置已保存，部分配置需重启生效"}
+
+    # 热更新运行时配置（立即生效，无需重启）
+    update_llm_config(
+        api_key=req.llm_api_key,
+        base_url=req.llm_base_url,
+        model=req.llm_model,
+    )
+
+    return {"ok": True, "message": "配置已保存并立即生效"}
 
 
 # ────────────────────── 策略配置 ──────────────────────
