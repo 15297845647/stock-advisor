@@ -67,6 +67,25 @@ class MarketDataService:
 
         return "【个股实时数据】\n\n" + "\n\n".join(sections)
 
+    async def fetch_stocks_detail(self, codes: list[str]) -> str | None:
+        """并行批量拉取多只股票的详细数据（推荐验证用）"""
+        import asyncio
+
+        tasks = [self._fetch_single_stock(code) for code in codes[:8]]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        sections = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.warning("批量拉取 %s 失败: %s", codes[i], result)
+            elif result:
+                sections.append(result)
+
+        if not sections:
+            return None
+
+        return "\n\n".join(sections)
+
     async def _fetch_single_stock(self, code: str) -> str | None:
         """拉取单只股票的完整数据并格式化"""
         quote = await self.akshare.get_realtime_quote(code)

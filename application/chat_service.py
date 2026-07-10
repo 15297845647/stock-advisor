@@ -2,8 +2,9 @@
 
 流程：
 1. 快速关键词检测明确动作（关注/取消/自选/大盘）→ 直接执行
-2. 其余全部走单次 LLM 对话（注入市场数据 + 用户画像）
-3. 解析 LLM 输出中的动作标记并执行副作用
+2. 推荐类请求走两阶段：LLM选股 → 拉实时数据 → LLM分析验证
+3. 其余走单次 LLM 对话（注入市场数据 + 用户画像）
+4. 解析 LLM 输出中的动作标记并执行副作用
 """
 
 import logging
@@ -34,6 +35,16 @@ _FUTURES_KW = {
     "甲醇", "乙二醇", "PTA", "pta", "期货", "生猪", "锌", "镍", "锡", "铝",
 }
 
+# 推荐意图关键词（无具体代码 + 含这些词 → 走两阶段推荐）
+_RECOMMEND_KW = {
+    "推荐", "选股", "推几只", "推一只", "推个", "推一个", "来几只",
+    "有什么好股", "买什么", "哪只好", "哪些值得", "帮我选", "换一批",
+    "再推", "还有吗", "再来几个", "有没有好的",
+}
+
+# 从 LLM 输出中提取 [PICKS:...] 标记
+_PICKS_RE = re.compile(r"\[PICKS:([\d,]+)\]")
+
 
 class ChatService:
     def __init__(self):
@@ -54,15 +65,97 @@ class ChatService:
             await self.user_repo.append_chat(wechat_id, "assistant", quick)
             return quick
 
-        # 统一 LLM 对话
+        # 判断是否为推荐请求（无具体代码 + 含推荐关键词）
         try:
-            response = await self._unified_chat(wechat_id, message, ctx)
+            if self._is_recommend_request(message):
+                response = await self._two_stage_recommend(message, ctx)
+            else:
+                response = await self._unified_chat(wechat_id, message, ctx)
         except Exception as e:
-            logger.exception("unified_chat error")
+            logger.exception("chat error")
             response = f"服务暂时不可用，请稍后再试。（{type(e).__name__}）"
 
         await self.user_repo.append_chat(wechat_id, "assistant", response)
         return response
+
+    def _is_recommend_request(self, message: str) -> bool:
+        """判断是否为推荐选股请求：无具体股票代码 + 含推荐关键词"""
+        has_code = bool(re.search(r"(?<!\d)\d{6}(?!\d)", message))
+        if has_code:
+            return False
+        return any(kw in message for kw in _RECOMMEND_KW)
+
+    async def _two_stage_recommend(self, message: str, ctx: UserContext) -> str:
+        """两阶段推荐：LLM选股 → 并行拉数据 → LLM基于数据分析"""
+        # 阶段1：让 LLM 推荐候选代码
+        pick_prompt = _load_template("pick_stocks.txt")
+        profile = self.market_data._format_user_profile(ctx)
+
+        pick_messages = [{"role": "user", "content": f"{profile}\n\n用户需求：{message}"}]
+        raw_picks = await self.minimax.chat(
+            system_prompt=pick_prompt,
+            messages=pick_messages,
+            max_tokens=500,
+        )
+
+        codes = self._parse_picks(raw_picks)
+        if not codes:
+            logger.warning("两阶段推荐：LLM未返回有效代码，降级普通对话")
+            return await self._unified_chat_with_snapshot(message, ctx)
+
+        logger.info("两阶段推荐：LLM候选 %s", codes)
+
+        # 阶段2：并行拉取实时数据
+        stock_data = await self.market_data.fetch_stocks_detail(codes)
+        if not stock_data:
+            logger.warning("两阶段推荐：实时数据全部拉取失败，降级普通对话")
+            return await self._unified_chat_with_snapshot(message, ctx)
+
+        # 阶段3：基于实时数据让 LLM 做最终分析
+        system_prompt = _load_template("unified.txt")
+        profile_text = self.market_data._format_user_profile(ctx)
+
+        analysis_content = (
+            f"{profile_text}\n\n"
+            f"【候选股票实时数据】\n\n{stock_data}\n\n"
+            f"【用户需求】\n{message}\n\n"
+            f"请基于以上实时数据，从候选中筛选最值得推荐的 3-5 只，"
+            f"淘汰技术面不佳或资金流出明显的。"
+            f"给出每只的操作建议和理由。"
+        )
+        analysis_messages = [{"role": "user", "content": analysis_content}]
+
+        raw = await self.minimax.chat(
+            system_prompt=system_prompt,
+            messages=analysis_messages,
+        )
+
+        clean_text, actions = extract_actions(raw)
+        return clean_text
+
+    @staticmethod
+    def _parse_picks(raw: str) -> list[str]:
+        """从 LLM 输出中提取 [PICKS:代码1,代码2,...] 中的代码列表"""
+        m = _PICKS_RE.search(raw)
+        if not m:
+            return []
+        codes = [c.strip() for c in m.group(1).split(",") if len(c.strip()) == 6]
+        # 过滤非法代码
+        return [c for c in codes if c[0] in "0136"]
+
+    async def _unified_chat_with_snapshot(self, message: str, ctx: UserContext) -> str:
+        """降级：注入 Top50 快照的普通推荐对话"""
+        system_prompt = _load_template("unified.txt")
+        market_context = await self.market_data.build_market_context(ctx, message)
+
+        messages = []
+        for msg in ctx.recent_chat[-6:]:
+            messages.append({"role": msg.role, "content": msg.content})
+        messages.append({"role": "user", "content": f"{market_context}\n\n【用户消息】\n{message}"})
+
+        raw = await self.minimax.chat(system_prompt=system_prompt, messages=messages)
+        clean_text, _ = extract_actions(raw)
+        return clean_text
 
     async def _try_quick_route(self, wechat_id: str, message: str) -> str | None:
         """关键词快速路由，匹配则直接返回结果，不匹配返回 None"""
