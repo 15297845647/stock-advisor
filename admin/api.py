@@ -14,7 +14,9 @@ from agent.config import (
     DB_PATH,
     ENV_FILE_PATH,
     get_llm_config,
+    get_tushare_config,
     update_llm_config,
+    update_tushare_config,
 )
 from infrastructure.database import get_connection
 
@@ -308,12 +310,14 @@ async def api_restart_cc():
 
 @router.get("/config", dependencies=[Depends(verify_token)])
 async def get_config():
-    """读取当前 LLM 配置（脱敏）"""
+    """读取当前 LLM + Tushare 配置（脱敏）"""
     cfg = get_llm_config()
+    ts_cfg = get_tushare_config()
     return {
         "llm_api_key": _mask_key(cfg["api_key"]),
         "llm_base_url": cfg["base_url"],
         "llm_model": cfg["model"],
+        "tushare_token": _mask_key(ts_cfg["token"]),
         "db_path": DB_PATH,
         "admin_port": int(os.getenv("ADMIN_PORT", "8900")),
     }
@@ -323,12 +327,13 @@ class UpdateConfigRequest(BaseModel):
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    tushare_token: str | None = None
     admin_password: str | None = None
 
 
 @router.put("/config", dependencies=[Depends(verify_token)])
 async def update_config(req: UpdateConfigRequest):
-    """修改 LLM 配置，立即热生效 + 持久化到 .env"""
+    """修改 LLM/Tushare 配置，立即热生效 + 持久化到 .env"""
     env_path = ENV_FILE_PATH
     env_map = _read_env_file(env_path)
 
@@ -338,6 +343,8 @@ async def update_config(req: UpdateConfigRequest):
         env_map["LLM_BASE_URL"] = req.llm_base_url
     if req.llm_model:
         env_map["LLM_MODEL"] = req.llm_model
+    if req.tushare_token:
+        env_map["TUSHARE_TOKEN"] = req.tushare_token
     if req.admin_password:
         env_map["ADMIN_PASSWORD"] = req.admin_password
 
@@ -349,6 +356,7 @@ async def update_config(req: UpdateConfigRequest):
         base_url=req.llm_base_url,
         model=req.llm_model,
     )
+    update_tushare_config(token=req.tushare_token)
 
     return {"ok": True, "message": "配置已保存并立即生效"}
 

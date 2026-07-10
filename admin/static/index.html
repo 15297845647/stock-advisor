@@ -552,6 +552,11 @@
                 <input type="text" x-model="cfg.llm_model"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">Tushare Token（期货数据）</label>
+                <input type="text" x-model="cfg.tushare_token" placeholder="当前值（脱敏）"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
               <hr class="border-gray-100">
               <div>
                 <label class="text-sm text-gray-500 block mb-1">修改管理密码</label>
@@ -838,6 +843,8 @@ function admin() {
         body.llm_api_key = this.cfg.llm_api_key;
       if (this.cfg.llm_base_url) body.llm_base_url = this.cfg.llm_base_url;
       if (this.cfg.llm_model) body.llm_model = this.cfg.llm_model;
+      if (this.cfg.tushare_token && !this.cfg.tushare_token.includes('****'))
+        body.tushare_token = this.cfg.tushare_token;
       if (this.newPassword) body.admin_password = this.newPassword;
 
       const d = await this.api('/api/config', { method:'PUT', body:JSON.stringify(body) });

@@ -12,10 +12,20 @@ _llm_config = {
     "model": os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
 }
 
+# Tushare 配置（期货数据源）— 运行时可被后台热更新
+_tushare_config = {
+    "token": os.getenv("TUSHARE_TOKEN", ""),
+}
+
 
 def get_llm_config() -> dict:
     """获取当前 LLM 配置（运行时可变）"""
     return _llm_config.copy()
+
+
+def get_tushare_config() -> dict:
+    """获取当前 Tushare 配置（运行时可变）"""
+    return _tushare_config.copy()
 
 
 def update_llm_config(api_key: str | None = None, base_url: str | None = None, model: str | None = None):
@@ -26,6 +36,12 @@ def update_llm_config(api_key: str | None = None, base_url: str | None = None, m
         _llm_config["base_url"] = base_url
     if model is not None:
         _llm_config["model"] = model
+
+
+def update_tushare_config(token: str | None = None):
+    """热更新 Tushare 配置"""
+    if token is not None:
+        _tushare_config["token"] = token
 
 
 # 兼容旧代码直接引用（首次加载时的值）
