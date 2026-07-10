@@ -86,10 +86,10 @@ class MarketDataService:
         return "【个股实时数据】\n\n" + "\n\n".join(sections)
 
     async def fetch_stocks_detail(self, codes: list[str]) -> str | None:
-        """并行批量拉取多只股票的详细数据（推荐验证用）"""
+        """并行批量拉取多只股票数据（推荐验证用，轻量版不拉资金流向）"""
         import asyncio
 
-        tasks = [self._fetch_single_stock(code) for code in codes[:8]]
+        tasks = [self._fetch_stock_light(code) for code in codes[:6]]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         sections = []
@@ -103,6 +103,29 @@ class MarketDataService:
             return None
 
         return "\n\n".join(sections)
+
+    async def _fetch_stock_light(self, code: str) -> str | None:
+        """轻量版个股数据（行情+技术指标，不拉资金流向，速度快）"""
+        quote = await self.akshare.get_realtime_quote(code)
+        if not quote:
+            return None
+
+        lines = [f"━━ {quote.name}（{code}）━━"]
+        lines.append(f"现价: {quote.price}  涨跌: {quote.change_pct:+.2f}%")
+        if quote.high and quote.low:
+            lines.append(f"今开: {quote.open_price}  最高: {quote.high}  最低: {quote.low}")
+        if quote.volume:
+            vol_wan = quote.volume / 10000
+            lines.append(f"成交量: {vol_wan:.0f}万手  成交额: {quote.amount / 1e8:.2f}亿" if quote.amount else f"成交量: {vol_wan:.0f}万手")
+
+        bars = await self.akshare.get_stock_history(code, days=30)
+        if bars:
+            tech = analyze_technical(bars)
+            if tech:
+                lines.append(f"技术: {tech.trend} MA5={tech.ma5} MA10={tech.ma10} MA20={tech.ma20}")
+                lines.append(f"  MACD柱={tech.macd_hist:+.3f} RSI={tech.rsi_14:.1f} 支撑{tech.support}/压力{tech.resistance}")
+
+        return "\n".join(lines)
 
     async def _fetch_single_stock(self, code: str) -> str | None:
         """拉取单只股票的完整数据并格式化"""

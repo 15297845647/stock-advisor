@@ -37,8 +37,8 @@ _RECOMMEND_KW = {
     "再推", "还有吗", "再来几个", "有没有好的",
 }
 
-# 从 LLM 输出中提取 [PICKS:...] 标记
-_PICKS_RE = re.compile(r"\[PICKS:([\d,]+)\]")
+# 从 LLM 输出中提取 [PICKS:...] 标记（兼容代码间有空格）
+_PICKS_RE = re.compile(r"\[PICKS:([\d,\s]+)\]")
 
 
 class ChatService:
@@ -62,7 +62,14 @@ class ChatService:
         # 判断是否为推荐请求（无具体代码 + 含推荐关键词）
         try:
             if self._is_recommend_request(message):
-                response = await self._two_stage_recommend(message, ctx)
+                import asyncio
+                try:
+                    response = await asyncio.wait_for(
+                        self._two_stage_recommend(message, ctx), timeout=90
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("两阶段推荐超时，降级快速推荐")
+                    response = await self._unified_chat_with_snapshot(message, ctx)
             else:
                 response = await self._unified_chat(wechat_id, message, ctx)
         except Exception as e:
