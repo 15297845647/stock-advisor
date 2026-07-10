@@ -10,6 +10,7 @@ import logging
 import re
 
 from application.analysis_service import AnalysisService
+from application.futures_service import FuturesAnalysisService
 from application.market_data_service import MarketDataService
 from application.subscription_service import SubscriptionService
 from domain.action_parser import extract_actions
@@ -27,11 +28,17 @@ _WATCHLIST_KW = {"自选股", "关注列表", "我的自选", "看看自选", "�
 _MARKET_KW = {"大盘", "市场概览", "三大指数", "大盘怎么样", "今天行情"}
 _DEEP_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*(\d{6})")
 _BACKTEST_KW = {"回测", "胜率", "历史准确率"}
+_FUTURES_KW = {
+    "螺纹", "铁矿", "原油", "黄金", "白银", "铜", "豆粕", "焦煤", "焦炭",
+    "纯碱", "玻璃", "欧线", "集运", "天然气", "棕榈", "橡胶", "沥青",
+    "甲醇", "乙二醇", "PTA", "pta", "期货", "生猪", "锌", "镍", "锡", "铝",
+}
 
 
 class ChatService:
     def __init__(self):
         self.analysis = AnalysisService()
+        self.futures = FuturesAnalysisService()
         self.subscription = SubscriptionService()
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
@@ -96,7 +103,7 @@ class ChatService:
         system_prompt = _load_template("unified.txt")
 
         # 构建 user 消息：市场上下文 + 对话历史 + 当前问题
-        market_context = await self.market_data.build_market_context(ctx)
+        market_context = await self.market_data.build_market_context(ctx, message)
 
         messages = []
         for msg in ctx.recent_chat[-6:]:
