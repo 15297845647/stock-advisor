@@ -27,6 +27,7 @@ _UNSUBSCRIBE_RE = re.compile(r"(?:取消关注|删除自选|移除自选|退订)
 _WATCHLIST_KW = {"自选股", "关注列表", "我的自选", "看看自选", "自选"}
 _MARKET_KW = {"大盘", "市场概览", "三大指数", "大盘怎么样", "今天行情"}
 _DEEP_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*(\d{6})")
+_DEEP_NAME_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*([^\d\s]{2,6})")
 _BACKTEST_KW = {"回测", "胜率", "历史准确率"}
 
 # 推荐意图关键词（无具体代码 + 含这些词 → 走两阶段推荐）
@@ -172,10 +173,19 @@ class ChatService:
         if any(kw in msg for kw in _MARKET_KW):
             return await self.analysis.get_market_overview()
 
-        # 深度分析
+        # 深度分析（代码）
         m = _DEEP_RE.search(msg)
         if m:
             return await self.analysis.analyze_stock_deep(m.group(1))
+
+        # 深度分析（名称）
+        m = _DEEP_NAME_RE.search(msg)
+        if m:
+            from infrastructure.akshare_client import AKShareClient
+            code = await AKShareClient().resolve_stock_name(m.group(1))
+            if code:
+                return await self.analysis.analyze_stock_deep(code)
+            return f"未找到「{m.group(1)}」对应的股票，请用6位代码重试。"
 
         # 回测
         if any(kw in msg for kw in _BACKTEST_KW):

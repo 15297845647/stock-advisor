@@ -360,6 +360,25 @@ class AKShareClient:
         from infrastructure.tdx_client import TdxClient
         self.tdx = TdxClient()
 
+    async def resolve_stock_name(self, name: str) -> str | None:
+        """从全量行情快照中按名称查找股票代码，返回6位代码或 None"""
+        try:
+            df = await _get_spot_df()
+            if df is None or df.empty:
+                return None
+            name_col = _col(df, "名称", "name", "股票名称")
+            code_col = _col(df, "代码", "code", "symbol")
+            if not name_col or not code_col:
+                return None
+            row = df[df[name_col].str.contains(name, na=False)]
+            if row.empty:
+                return None
+            code = str(row.iloc[0][code_col])
+            return _normalize_code(code)
+        except Exception as e:
+            logger.warning("名称查代码失败(%s): %s", name, e)
+            return None
+
     # ── 个股日K（内存缓存 → 东财 → 腾讯 → 通达信 fallback）──
 
     async def get_stock_history(self, code: str, days: int = 60) -> list[StockDailyBar]:

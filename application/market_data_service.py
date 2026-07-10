@@ -31,6 +31,10 @@ class MarketDataService:
 
         # 检测消息中的股票代码，拉取个股实时数据
         stock_codes = self._extract_stock_codes(message)
+        if not stock_codes:
+            # 尝试从名称识别
+            stock_codes = await self.resolve_stock_names(message)
+
         if stock_codes:
             stock_data = await self._get_stock_details(stock_codes)
             if stock_data:
@@ -49,6 +53,20 @@ class MarketDataService:
         codes = _STOCK_CODE_RE.findall(message)
         # 过滤明显不是股票代码的（如日期 202607）
         return [c for c in codes if c[0] in "0136"]
+
+    async def resolve_stock_names(self, message: str) -> list[str]:
+        """从消息中尝试识别股票名称并转为代码（用于无明确代码时）"""
+        import re as _re
+        name_patterns = _re.findall(r"(?:分析|看看|查一下|怎么样)\s*([^\d\s,，]{2,6})", message)
+        if not name_patterns:
+            return []
+
+        codes = []
+        for name in name_patterns[:3]:
+            code = await self.akshare.resolve_stock_name(name)
+            if code:
+                codes.append(code)
+        return codes
 
     async def _get_stock_details(self, codes: list[str]) -> str | None:
         """获取指定股票的详细实时数据（行情+技术指标+资金流向）"""
