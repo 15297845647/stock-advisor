@@ -33,21 +33,39 @@ def _to_ts_code(code: str) -> str:
 
 
 class _TushareProProxy:
-    """Tushare Pro 对象懒加载 — 每次读最新 token"""
+    """Tushare Pro 对象懒加载 — 每次读最新 token + http_url"""
 
     _pro = None
     _last_token: str = ""
+    _last_http_url: str = ""
 
     @classmethod
     def get(cls):
-        """返回可用的 pro_api 实例（token 变化时自动重建）"""
-        token = get_tushare_config().get("token", "").strip()
+        """返回可用的 pro_api 实例（token/http_url 变化时自动重建）"""
+        cfg = get_tushare_config()
+        token = cfg.get("token", "").strip()
+        http_url = cfg.get("http_url", "").strip()
+
         if not token:
             raise ValueError("未配置 TUSHARE_TOKEN")
-        if cls._pro is None or cls._last_token != token:
+
+        # token 或 URL 变化时重建
+        needs_rebuild = (
+            cls._pro is None
+            or cls._last_token != token
+            or cls._last_http_url != http_url
+        )
+
+        if needs_rebuild:
             import tushare as ts
             cls._pro = ts.pro_api(token)
+            # 若配置了自定义 http_url，覆盖 SDK 默认地址
+            if http_url:
+                cls._pro._DataApi__http_url = http_url
+                logger.info("Tushare 使用自定义 API 地址: %s", http_url)
             cls._last_token = token
+            cls._last_http_url = http_url
+
         return cls._pro
 
 

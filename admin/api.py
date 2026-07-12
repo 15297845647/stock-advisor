@@ -334,6 +334,7 @@ async def get_config():
         },
         # 其他
         "tushare_token": _mask_key(ts_cfg["token"]),
+        "tushare_http_url": ts_cfg.get("http_url", ""),
         "db_path": DB_PATH,
         "admin_port": int(os.getenv("ADMIN_PORT", "8900")),
     }
@@ -352,8 +353,10 @@ class UpdateConfigRequest(BaseModel):
     llm_model: str | None = None
     # 各 provider 独立配置（推荐使用）
     providers: dict[str, ProviderConfigInput] | None = None
-    # 其他
+    # Tushare
     tushare_token: str | None = None
+    tushare_http_url: str | None = None
+    # 管理
     admin_password: str | None = None
 
 
@@ -370,6 +373,8 @@ async def update_config(req: UpdateConfigRequest):
     # 其他
     if req.tushare_token:
         env_map["TUSHARE_TOKEN"] = req.tushare_token
+    if req.tushare_http_url is not None:
+        env_map["TUSHARE_HTTP_URL"] = req.tushare_http_url
     if req.admin_password:
         env_map["ADMIN_PASSWORD"] = req.admin_password
 
@@ -382,7 +387,9 @@ async def update_config(req: UpdateConfigRequest):
         model=req.llm_model,
     )
     _hot_update_providers(req.providers)
-    update_tushare_config(token=req.tushare_token)
+    update_tushare_config(
+        token=req.tushare_token, http_url=req.tushare_http_url,
+    )
 
     return {"ok": True, "message": "配置已保存并立即生效"}
 

@@ -39,8 +39,12 @@ _PROVIDER_ENV_MAP = {
 }
 
 # ────────────────────── Tushare 配置 ──────────────────────
+# http_url 用于自定义 Tushare API 端点（例如代理服务）
+# 官方默认：http://api.tushare.pro（tushare SDK 内置）
+# 代理示例：https://ts.gyzcloud.top/api
 _tushare_config = {
     "token": os.getenv("TUSHARE_TOKEN", ""),
+    "http_url": os.getenv("TUSHARE_HTTP_URL", ""),
 }
 
 
@@ -99,10 +103,14 @@ def update_provider_config(
         cfg["base_url"] = base_url
 
 
-def update_tushare_config(token: str | None = None):
+def update_tushare_config(
+    token: str | None = None, http_url: str | None = None,
+) -> None:
     """热更新 Tushare 配置"""
     if token is not None:
         _tushare_config["token"] = token
+    if http_url is not None:
+        _tushare_config["http_url"] = http_url.strip()
 
 
 # 兼容旧代码直接引用（首次加载时的值）

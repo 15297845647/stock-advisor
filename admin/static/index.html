@@ -823,6 +823,15 @@
                 <input type="text" x-model="cfg.tushare_token" placeholder="当前值（脱敏）"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
+              <div>
+                <label class="text-sm text-gray-500 block mb-1">
+                  Tushare API 地址（可选）
+                  <span class="text-xs text-gray-400 ml-2">— 使用代理服务时填，留空用官方默认 http://api.tushare.pro</span>
+                </label>
+                <input type="text" x-model="cfg.tushare_http_url"
+                       placeholder="留空 = 官方；示例：https://ts.gyzcloud.top/api"
+                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              </div>
               <hr class="border-gray-100">
               <div>
                 <label class="text-sm text-gray-500 block mb-1">修改管理密码</label>
@@ -1157,6 +1166,8 @@ function admin() {
       // Tushare + 密码
       if (this.cfg.tushare_token && !this.cfg.tushare_token.includes('****'))
         body.tushare_token = this.cfg.tushare_token;
+      if (this.cfg.tushare_http_url !== undefined)
+        body.tushare_http_url = this.cfg.tushare_http_url || '';
       if (this.newPassword) body.admin_password = this.newPassword;
 
       const d = await this.api('/api/config', { method:'PUT', body:JSON.stringify(body) });
