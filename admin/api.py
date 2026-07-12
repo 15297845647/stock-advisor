@@ -506,6 +506,108 @@ def _tail_file(path: Path, max_lines: int = 1000) -> list[str]:
         return []
 
 
+# ────────────────────── 数据源管理 ──────────────────────
+
+
+def _get_ds_service():
+    """延迟获取 DataSourceAdminService 单例"""
+    from application.data_source_admin_service import DataSourceAdminService
+    if not hasattr(_get_ds_service, "_instance"):
+        _get_ds_service._instance = DataSourceAdminService()
+    return _get_ds_service._instance
+
+
+@router.get("/data-sources/summary", dependencies=[Depends(verify_token)])
+async def ds_summary(hours: int = Query(24, ge=1, le=720)):
+    """概览卡片数据"""
+    return await _get_ds_service().get_summary(hours=hours)
+
+
+@router.get("/data-sources/health", dependencies=[Depends(verify_token)])
+async def ds_health():
+    """所有 source 的实时健康状态"""
+    return await _get_ds_service().get_health_status()
+
+
+@router.get("/data-sources/stats", dependencies=[Depends(verify_token)])
+async def ds_stats(hours: int = Query(24, ge=1, le=720)):
+    """按 source 汇总近 N 小时统计"""
+    return await _get_ds_service().get_stats(hours=hours)
+
+
+@router.get("/data-sources/stats/by-operation", dependencies=[Depends(verify_token)])
+async def ds_stats_by_operation(hours: int = Query(24, ge=1, le=720)):
+    """按 operation × source 展示降级链命中分布"""
+    return await _get_ds_service().get_stats_by_operation(hours=hours)
+
+
+@router.get("/data-sources/timeline", dependencies=[Depends(verify_token)])
+async def ds_timeline(hours: int = Query(24, ge=1, le=168)):
+    """近 N 小时的分桶调用趋势"""
+    return await _get_ds_service().get_timeline(hours=hours)
+
+
+@router.get("/data-sources/recent-failures", dependencies=[Depends(verify_token)])
+async def ds_recent_failures(limit: int = Query(50, ge=1, le=500)):
+    """最近 N 条失败日志"""
+    return {"failures": await _get_ds_service().get_recent_failures(limit=limit)}
+
+
+@router.post(
+    "/data-sources/{source_name}/reset-breaker",
+    dependencies=[Depends(verify_token)],
+)
+async def ds_reset_breaker(source_name: str):
+    """手动重置指定 source 的熔断器"""
+    result = await _get_ds_service().reset_breaker(source_name)
+    if not result.get("success"):
+        raise HTTPException(404, result.get("message", "重置失败"))
+    return result
+
+
+@router.post("/data-sources/probe", dependencies=[Depends(verify_token)])
+async def ds_probe():
+    """并发探活所有 source"""
+    return await _get_ds_service().probe_all()
+
+
+@router.post("/data-sources/reload-config", dependencies=[Depends(verify_token)])
+async def ds_reload_config():
+    """热重载 data_sources.yaml"""
+    result = await _get_ds_service().reload_config()
+    if not result.get("success"):
+        raise HTTPException(500, result.get("message", "重载失败"))
+    return result
+
+
+@router.get("/data-sources/config", dependencies=[Depends(verify_token)])
+async def ds_get_config():
+    """返回当前生效的配置"""
+    return await _get_ds_service().get_current_config()
+
+
+# ────────────────────── LLM 用量统计 ──────────────────────
+
+
+def _get_usage_service():
+    from application.usage_statistics_service import UsageStatisticsService
+    if not hasattr(_get_usage_service, "_instance"):
+        _get_usage_service._instance = UsageStatisticsService()
+    return _get_usage_service._instance
+
+
+@router.get("/usage/dashboard", dependencies=[Depends(verify_token)])
+async def usage_dashboard(hours: int = Query(24, ge=1, le=720)):
+    """LLM 用量仪表盘"""
+    return await _get_usage_service().get_dashboard(hours=hours)
+
+
+@router.get("/usage/daily", dependencies=[Depends(verify_token)])
+async def usage_daily(days: int = Query(30, ge=1, le=365)):
+    """LLM 每日成本趋势"""
+    return await _get_usage_service().get_daily_series(days=days)
+
+
 # ────────────────────── helpers ──────────────────────
 
 

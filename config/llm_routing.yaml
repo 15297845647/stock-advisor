@@ -1,0 +1,149 @@
+# ─────────────────────────────────────────────────────
+# LLM 路由配置 — 按 task_type 分发到不同 provider
+# ─────────────────────────────────────────────────────
+# 修改后需要重启进程或 Admin 后台 → 数据源/LLM → 重载
+#
+# 使用建议：
+#   轻量任务（意图/聊天/单分析师）用便宜模型
+#   核心决策（Judge/Risk Manager）用大模型
+# ─────────────────────────────────────────────────────
+
+providers:
+  deepseek:
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    enabled: true
+
+  qwen:
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key_env: DASHSCOPE_API_KEY
+    enabled: true
+
+  minimax:
+    base_url: https://api.minimaxi.com/v1
+    api_key_env: MINIMAX_API_KEY
+    enabled: true
+
+  # 兜底：使用 .env 里的 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
+  default:
+    base_url: ""    # 空 → 运行时从 agent.config.get_llm_config() 读
+    api_key_env: LLM_API_KEY
+    enabled: true
+
+# ─────────────────────────────────────────────────────
+# 任务路由 — 每个任务指定 provider + model
+# ─────────────────────────────────────────────────────
+tasks:
+  # 轻量：意图 + 聊天
+  intent_parse:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 512
+    temperature: 0.3
+    fallback_provider: default
+    fallback_model: deepseek-chat
+
+  chat:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.7
+    fallback_provider: default
+    fallback_model: deepseek-chat
+
+  # 中等：分析师团队
+  technical_analyst:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.5
+  fundamental_analyst:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.5
+  news_analyst:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.5
+  capital_analyst:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.5
+
+  # 推荐流程
+  pick_stocks:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 512
+    temperature: 0.6
+  recommend_judge:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 4096
+    temperature: 0.5
+
+  # 快速综合分析
+  quick_analysis:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 3000
+    temperature: 0.5
+
+  # 重量：研究员 + 风控 + Judge
+  bull_researcher:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 3000
+    temperature: 0.7
+  bear_researcher:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 3000
+    temperature: 0.7
+  risk_conservative:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.5
+  risk_aggressive:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.5
+  risk_neutral:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2048
+    temperature: 0.5
+  risk_manager:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 2500
+    temperature: 0.4
+  judge:
+    provider: deepseek
+    model: deepseek-chat
+    max_tokens: 4096
+    temperature: 0.4
+
+# ─────────────────────────────────────────────────────
+# 模型计价（元 / 百万 token） — 用于成本统计
+# 数据来源：各厂商官方定价表，可能过时，仅供参考
+# ─────────────────────────────────────────────────────
+pricing:
+  # DeepSeek
+  - { provider: deepseek, model: deepseek-chat,     input: 1.0, output: 2.0 }
+  - { provider: deepseek, model: deepseek-reasoner, input: 4.0, output: 16.0 }
+  - { provider: deepseek, model: deepseek-v4-flash, input: 0.5, output: 1.0 }
+
+  # Qwen
+  - { provider: qwen, model: qwen-turbo, input: 0.3, output: 0.6 }
+  - { provider: qwen, model: qwen-plus,  input: 0.8, output: 2.0 }
+  - { provider: qwen, model: qwen-max,   input: 20.0, output: 60.0 }
+
+  # MiniMax
+  - { provider: minimax, model: MiniMax-M2,     input: 2.0, output: 8.0 }
+  - { provider: minimax, model: abab6.5s-chat,  input: 1.0, output: 1.0 }

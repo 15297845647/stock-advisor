@@ -331,6 +331,215 @@
           </div>
         </div>
 
+        <!-- 数据源 -->
+        <div x-show="page==='data-sources'" class="fade-in">
+          <div class="flex items-center justify-between mb-6">
+            <h2 class="text-xl font-bold">数据源管理</h2>
+            <div class="flex items-center gap-3">
+              <select x-model.number="ds.period" @change="loadDataSources()"
+                      class="text-sm border border-gray-200 rounded-lg px-3 py-1.5">
+                <option :value="6">近 6 小时</option>
+                <option :value="24">近 24 小时</option>
+                <option :value="72">近 3 天</option>
+                <option :value="168">近 7 天</option>
+              </select>
+              <button @click="probeAllSources()" :disabled="ds.probing"
+                      class="text-sm bg-white border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition disabled:opacity-50">
+                <span x-show="!ds.probing">🔄 立即探活</span>
+                <span x-show="ds.probing">探活中...</span>
+              </button>
+              <button @click="reloadDataSourceConfig()"
+                      class="text-sm bg-white border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg transition">
+                ⚙️ 重载配置
+              </button>
+              <button @click="loadDataSources()"
+                      class="text-sm bg-blue-600 text-white hover:bg-blue-700 px-3 py-1.5 rounded-lg transition">
+                刷新
+              </button>
+            </div>
+          </div>
+
+          <p x-show="ds.msg" :class="ds.msgOk ? 'text-green-600' : 'text-red-500'"
+             class="text-sm mb-4" x-text="ds.msg"></p>
+
+          <!-- 概览卡片 -->
+          <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+            <div class="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
+              <div class="text-xs text-gray-500">健康 / 总数</div>
+              <div class="text-xl font-bold mt-1">
+                <span class="text-green-600" x-text="ds.summary?.sources_healthy ?? '-'"></span>
+                <span class="text-gray-400"> / </span>
+                <span x-text="ds.summary?.sources_total ?? '-'"></span>
+              </div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
+              <div class="text-xs text-gray-500">熔断中</div>
+              <div class="text-xl font-bold mt-1 text-red-500"
+                   x-text="ds.summary?.sources_broken ?? '-'"></div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
+              <div class="text-xs text-gray-500"><span x-text="ds.period"></span>h 调用数</div>
+              <div class="text-xl font-bold mt-1"
+                   x-text="(ds.summary?.total_calls || 0).toLocaleString()"></div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
+              <div class="text-xs text-gray-500">成功率</div>
+              <div class="text-xl font-bold mt-1">
+                <span x-text="((ds.summary?.success_rate || 0) * 100).toFixed(1) + '%'"></span>
+              </div>
+            </div>
+            <div class="bg-white rounded-xl shadow-sm p-4 border border-gray-100">
+              <div class="text-xs text-gray-500">平均延迟</div>
+              <div class="text-xl font-bold mt-1">
+                <span x-text="(ds.summary?.avg_latency_ms || 0).toFixed(0) + 'ms'"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 源状态表 -->
+          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6">
+            <h3 class="font-medium mb-4">源状态</h3>
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr class="text-left text-gray-500 border-b border-gray-100">
+                    <th class="pb-2 pr-4">状态</th>
+                    <th class="pb-2 pr-4">名称</th>
+                    <th class="pb-2 pr-4">调用</th>
+                    <th class="pb-2 pr-4">成功率</th>
+                    <th class="pb-2 pr-4">平均耗时</th>
+                    <th class="pb-2 pr-4">最大耗时</th>
+                    <th class="pb-2 pr-4">连续失败</th>
+                    <th class="pb-2 pr-4">熔断剩余</th>
+                    <th class="pb-2">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="src in ds.health" :key="src.name">
+                    <tr class="border-b border-gray-50">
+                      <td class="py-2 pr-4">
+                        <span x-text="!src.enabled ? '⚪' : (src.breaker_open ? '🔴' : '🟢')"></span>
+                      </td>
+                      <td class="py-2 pr-4 font-mono text-xs" x-text="src.name"></td>
+                      <td class="py-2 pr-4" x-text="dsStatOf(src.name)?.calls ?? '-'"></td>
+                      <td class="py-2 pr-4">
+                        <span x-text="dsStatOf(src.name) ? ((dsStatOf(src.name).success_rate * 100).toFixed(1) + '%') : '-'"
+                              :class="dsStatOf(src.name)?.success_rate < 0.9 ? 'text-red-500' : 'text-green-600'"></span>
+                      </td>
+                      <td class="py-2 pr-4"
+                          x-text="dsStatOf(src.name) ? (dsStatOf(src.name).avg_latency_ms.toFixed(0) + 'ms') : '-'"></td>
+                      <td class="py-2 pr-4 text-gray-400"
+                          x-text="dsStatOf(src.name) ? (dsStatOf(src.name).max_latency_ms + 'ms') : '-'"></td>
+                      <td class="py-2 pr-4" x-text="src.consecutive_failures"></td>
+                      <td class="py-2 pr-4 text-gray-400"
+                          x-text="src.cooldown_remaining_sec > 0 ? (src.cooldown_remaining_sec + 's') : '-'"></td>
+                      <td class="py-2">
+                        <button x-show="src.breaker_open" @click="resetBreaker(src.name)"
+                                class="text-xs bg-orange-500 hover:bg-orange-600 text-white px-2 py-1 rounded transition">
+                          重置熔断
+                        </button>
+                        <button x-show="!src.breaker_open && src.enabled" @click="resetBreaker(src.name)"
+                                class="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-2 py-1 rounded transition">
+                          清零计数
+                        </button>
+                      </td>
+                    </tr>
+                  </template>
+                  <tr x-show="ds.health.length === 0">
+                    <td colspan="9" class="py-6 text-center text-gray-400">暂无数据</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- 降级链命中分布 -->
+          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6">
+            <h3 class="font-medium mb-4">降级链命中分布</h3>
+            <div class="space-y-4">
+              <template x-for="op in ds.opStats" :key="op.operation">
+                <div>
+                  <div class="flex items-center justify-between text-sm mb-2">
+                    <div>
+                      <span class="font-mono font-medium" x-text="op.operation"></span>
+                      <span class="text-gray-400 ml-2">共 <span x-text="op.total_calls"></span> 次</span>
+                    </div>
+                    <span class="text-xs text-gray-500">
+                      降级率
+                      <span :class="op.fallback_rate > 0.3 ? 'text-red-500 font-medium' : 'text-gray-500'"
+                            x-text="(op.fallback_rate * 100).toFixed(1) + '%'"></span>
+                    </span>
+                  </div>
+                  <div class="h-6 flex overflow-hidden rounded bg-gray-100">
+                    <template x-for="(s, i) in op.sources" :key="s.source">
+                      <div :style="`width: ${(s.rate * 100).toFixed(1)}%`"
+                           :class="i === 0 ? 'bg-green-500' : (i === 1 ? 'bg-yellow-400' : 'bg-red-400')"
+                           :title="`${s.source}: ${s.hits} 次 (${(s.rate * 100).toFixed(1)}%)`"
+                           class="text-white text-xs flex items-center justify-center overflow-hidden whitespace-nowrap">
+                        <span x-show="s.rate > 0.08" x-text="s.source.split('.').pop()"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <div x-show="ds.opStats.length === 0" class="text-gray-400 text-sm text-center py-4">
+                暂无数据（还没有请求过任何数据源）
+              </div>
+            </div>
+          </div>
+
+          <!-- 探活结果 -->
+          <div x-show="ds.probeResults" class="bg-white rounded-xl shadow-sm p-5 border border-gray-100 mb-6">
+            <h3 class="font-medium mb-3">
+              探活结果
+              <span class="text-xs text-gray-400 ml-2" x-text="ds.probeResults?.probed_at"></span>
+            </h3>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+              <template x-for="(r, name) in ds.probeResults?.results || {}" :key="name">
+                <div class="flex items-center gap-2 p-2 border border-gray-100 rounded">
+                  <span x-text="r.healthy ? '🟢' : '🔴'"></span>
+                  <span class="font-mono text-xs" x-text="name"></span>
+                  <span x-show="r.error" class="text-xs text-red-400 truncate flex-1" x-text="r.error"></span>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- 最近失败日志 -->
+          <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
+            <h3 class="font-medium mb-4">最近失败日志（Top 50）</h3>
+            <div class="overflow-x-auto max-h-96 overflow-y-auto">
+              <table class="w-full text-sm">
+                <thead class="sticky top-0 bg-white">
+                  <tr class="text-left text-gray-500 border-b border-gray-100">
+                    <th class="pb-2 pr-4">时间</th>
+                    <th class="pb-2 pr-4">Operation</th>
+                    <th class="pb-2 pr-4">Source</th>
+                    <th class="pb-2 pr-4">股票</th>
+                    <th class="pb-2 pr-4">耗时</th>
+                    <th class="pb-2">错误</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="(f, i) in ds.failures" :key="i">
+                    <tr class="border-b border-gray-50">
+                      <td class="py-2 pr-4 text-xs text-gray-500" x-text="f.created_at?.slice(5, 19)"></td>
+                      <td class="py-2 pr-4 font-mono text-xs" x-text="f.operation"></td>
+                      <td class="py-2 pr-4 font-mono text-xs" x-text="f.source"></td>
+                      <td class="py-2 pr-4 font-mono text-xs" x-text="f.stock_code || '-'"></td>
+                      <td class="py-2 pr-4 text-gray-400" x-text="f.latency_ms + 'ms'"></td>
+                      <td class="py-2 text-xs text-red-500 truncate max-w-md" :title="f.error" x-text="f.error"></td>
+                    </tr>
+                  </template>
+                  <tr x-show="ds.failures.length === 0">
+                    <td colspan="6" class="py-6 text-center text-gray-400">近期无失败记录</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <!-- 日志查看 -->
         <div x-show="page==='logs'" class="fade-in">
           <div class="flex items-center justify-between mb-6">
@@ -630,10 +839,28 @@ function admin() {
     midlongSaved: false,
     midlongMsg: '',
 
+    // data sources
+    ds: {
+      summary: null,
+      health: [],
+      stats: [],
+      opStats: [],
+      failures: [],
+      config: null,
+      loading: false,
+      msg: '',
+      msgOk: false,
+      probing: false,
+      probeResults: null,
+      period: 24,
+    },
+    _dsRefreshTimer: null,
+
     menu: [
       { key: 'dashboard', label: '仪表盘' },
       { key: 'users', label: '用户管理' },
       { key: 'strategy', label: '策略配置' },
+      { key: 'data-sources', label: '数据源' },
       { key: 'logs', label: '日志查看' },
       { key: 'config', label: '配置管理' },
     ],
@@ -642,8 +869,9 @@ function admin() {
       this.menu[0].load = () => this.loadDashboard();
       this.menu[1].load = () => this.loadUsers();
       this.menu[2].load = () => { this.loadStrategy(); this.loadMidlong(); };
-      this.menu[3].load = () => this.loadLogFiles();
-      this.menu[4].load = () => this.loadConfig();
+      this.menu[3].load = () => this.loadDataSources();
+      this.menu[4].load = () => this.loadLogFiles();
+      this.menu[5].load = () => this.loadConfig();
       if (this.token) await this.loadDashboard();
     },
 
@@ -874,6 +1102,102 @@ function admin() {
       const d = await this.api('/api/strategy-config/midlong', { method:'PUT', body:JSON.stringify(this.midlongCfg) });
       if (d && d.ok) { this.midlongSaved = true; this.midlongMsg = '已保存，实时生效'; this.midlongCfg = d.config; }
       setTimeout(() => this.midlongSaved = false, 3000);
+    },
+
+    // ── Data Sources ──
+    async loadDataSources() {
+      this.ds.loading = true;
+      this.ds.msg = '';
+      try {
+        const h = this.ds.period;
+        const [summary, health, stats, opStats, failures] = await Promise.all([
+          this.api('/api/data-sources/summary?hours=' + h),
+          this.api('/api/data-sources/health'),
+          this.api('/api/data-sources/stats?hours=' + h),
+          this.api('/api/data-sources/stats/by-operation?hours=' + h),
+          this.api('/api/data-sources/recent-failures?limit=50'),
+        ]);
+        if (summary) this.ds.summary = summary;
+        if (health) this.ds.health = health.sources || [];
+        if (stats) this.ds.stats = stats.sources || [];
+        if (opStats) this.ds.opStats = opStats.operations || [];
+        if (failures) this.ds.failures = failures.failures || [];
+      } catch (e) {
+        this.ds.msg = '加载失败: ' + e.message;
+        this.ds.msgOk = false;
+      } finally {
+        this.ds.loading = false;
+      }
+    },
+
+    dsStatOf(name) {
+      // 按名称从 stats 数组中查对应统计
+      return this.ds.stats.find(s => s.source === name);
+    },
+
+    async resetBreaker(name) {
+      if (!confirm(`确认重置 ${name} 的熔断器？`)) return;
+      try {
+        const r = await fetch(`/api/data-sources/${encodeURIComponent(name)}/reset-breaker`, {
+          method: 'POST', headers: this.headers(),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          this.ds.msg = d.detail || '重置失败';
+          this.ds.msgOk = false;
+        } else {
+          this.ds.msg = `${name} 熔断已重置`;
+          this.ds.msgOk = true;
+          await this.loadDataSources();
+        }
+      } catch (e) {
+        this.ds.msg = '请求失败';
+        this.ds.msgOk = false;
+      }
+      setTimeout(() => this.ds.msg = '', 3000);
+    },
+
+    async probeAllSources() {
+      this.ds.probing = true;
+      this.ds.msg = '';
+      try {
+        const r = await fetch('/api/data-sources/probe', {
+          method: 'POST', headers: this.headers(),
+        });
+        const d = await r.json();
+        this.ds.probeResults = d;
+        this.ds.msg = '探活完成';
+        this.ds.msgOk = true;
+        await this.loadDataSources();
+      } catch (e) {
+        this.ds.msg = '探活失败';
+        this.ds.msgOk = false;
+      } finally {
+        this.ds.probing = false;
+        setTimeout(() => this.ds.msg = '', 3000);
+      }
+    },
+
+    async reloadDataSourceConfig() {
+      if (!confirm('确认从 config/data_sources.yaml 热重载配置？')) return;
+      try {
+        const r = await fetch('/api/data-sources/reload-config', {
+          method: 'POST', headers: this.headers(),
+        });
+        const d = await r.json();
+        if (!r.ok) {
+          this.ds.msg = d.detail || '重载失败';
+          this.ds.msgOk = false;
+        } else {
+          this.ds.msg = '配置已热重载';
+          this.ds.msgOk = true;
+          await this.loadDataSources();
+        }
+      } catch (e) {
+        this.ds.msg = '请求失败';
+        this.ds.msgOk = false;
+      }
+      setTimeout(() => this.ds.msg = '', 3000);
     },
   }
 }

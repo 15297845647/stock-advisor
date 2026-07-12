@@ -106,6 +106,92 @@ CREATE TABLE IF NOT EXISTS strategy_config (
     value TEXT NOT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 数据源调用日志（供 Admin 观测降级链 + 命中率）
+CREATE TABLE IF NOT EXISTS data_source_call_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operation TEXT NOT NULL,           -- quote/kline/fund_flow/sector_flow/news
+    source TEXT NOT NULL,              -- akshare.spot_em / tushare.quote / ...
+    stock_code TEXT,                   -- 可为空（如 sector_flow 无关个股）
+    success INTEGER NOT NULL,          -- 0/1
+    latency_ms INTEGER,
+    error TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_dsc_log_ts ON data_source_call_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_dsc_log_source ON data_source_call_log(source, created_at);
+CREATE INDEX IF NOT EXISTS idx_dsc_log_success ON data_source_call_log(success, created_at);
+
+-- LLM 用量记录（供 Admin 查看 tokens / 成本 / 用户分布）
+CREATE TABLE IF NOT EXISTS llm_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wechat_id TEXT,                    -- 归属用户（可空 = 系统调用）
+    task_type TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    cost_cny REAL DEFAULT 0.0,
+    latency_ms INTEGER,
+    success INTEGER DEFAULT 1,
+    error TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_user ON llm_usage(wechat_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_task ON llm_usage(task_type, created_at);
+
+-- 推荐记录（供回测）
+CREATE TABLE IF NOT EXISTS recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wechat_id TEXT,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT,
+    recommended_at TIMESTAMP NOT NULL,
+    recommend_price REAL,
+    target_price REAL,
+    stop_loss REAL,
+    risk_score INTEGER,
+    reason TEXT,
+    intent_json TEXT,
+    adjusted INTEGER DEFAULT 0,
+    outcome TEXT,
+    outcome_price REAL,
+    outcome_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_rec_user_ts ON recommendations(wechat_id, recommended_at);
+CREATE INDEX IF NOT EXISTS idx_rec_code_ts ON recommendations(stock_code, recommended_at);
+
+-- 股票新闻（预拉取入库）
+CREATE TABLE IF NOT EXISTS stock_news (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    publish_time TEXT NOT NULL,
+    source TEXT,
+    url TEXT,
+    news_type TEXT DEFAULT 'news',
+    hash TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_news_code_time ON stock_news(stock_code, publish_time DESC);
+
+-- 分析报告分享链接（PDF 短链）
+CREATE TABLE IF NOT EXISTS report_shares (
+    share_token TEXT PRIMARY KEY,
+    stock_code TEXT NOT NULL,
+    stock_name TEXT,
+    depth TEXT,                        -- QUICK / STANDARD / DEEP
+    report_content TEXT,               -- 完整报告 markdown
+    pdf_path TEXT,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    view_count INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_report_shares_expire ON report_shares(expires_at);
 """
 
 

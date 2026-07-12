@@ -12,6 +12,7 @@ import re
 
 from application.analysis_service import AnalysisService
 from application.market_data_service import MarketDataService
+from application.recommend_service import RecommendService
 from application.subscription_service import SubscriptionService
 from domain.action_parser import extract_actions
 from domain.models.user_context import UserContext
@@ -28,6 +29,8 @@ _WATCHLIST_KW = {"自选股", "关注列表", "我的自选", "看看自选", "�
 _MARKET_KW = {"大盘", "市场概览", "三大指数", "大盘怎么样", "今天行情"}
 _DEEP_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*(\d{6})")
 _DEEP_NAME_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*([^\d\s]{2,6})")
+_QUICK_RE = re.compile(r"(?:快速分析|简版分析|快速看)\s*(\d{6})")
+_QUICK_NAME_RE = re.compile(r"(?:快速分析|简版分析|快速看)\s*([^\d\s]{2,6})")
 _BACKTEST_KW = {"回测", "胜率", "历史准确率"}
 
 # 推荐意图关键词（无具体代码 + 含这些词 → 走两阶段推荐）
@@ -48,6 +51,7 @@ class ChatService:
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
         self.market_data = MarketDataService()
+        self.recommend_svc = RecommendService()
 
     async def handle(self, wechat_id: str, message: str, ctx: UserContext) -> str:
         """主入口：快速路由 or LLM 对话"""
@@ -87,52 +91,24 @@ class ChatService:
         return any(kw in message for kw in _RECOMMEND_KW)
 
     async def _two_stage_recommend(self, message: str, ctx: UserContext) -> str:
-        """两阶段推荐：LLM选股 → 并行拉数据 → LLM基于数据分析"""
-        # 阶段1：让 LLM 推荐候选代码
-        pick_prompt = _load_template("pick_stocks.txt")
-        profile = self.market_data._format_user_profile(ctx)
-
-        pick_messages = [{"role": "user", "content": f"{profile}\n\n用户需求：{message}"}]
-        raw_picks = await self.minimax.chat(
-            system_prompt=pick_prompt,
-            messages=pick_messages,
-            max_tokens=500,
-        )
-
-        codes = self._parse_picks(raw_picks)
-        if not codes:
-            logger.warning("两阶段推荐：LLM未返回有效代码，降级普通对话")
+        """
+        推荐流程（P2 改造版）：
+        规则漏斗 → LLM 裁决 → 决策校准 → 落库
+        委托给 RecommendService 编排。
+        """
+        try:
+            recs, summary = await self.recommend_svc.recommend(message, ctx)
+        except Exception as e:
+            logger.exception("推荐流程失败，降级快照对话")
             return await self._unified_chat_with_snapshot(message, ctx)
 
-        logger.info("两阶段推荐：LLM候选 %s", codes)
+        if not recs:
+            # 无推荐时降级快照对话给用户一个响应
+            logger.warning("推荐服务无输出，降级快照对话")
+            fallback = await self._unified_chat_with_snapshot(message, ctx)
+            return summary + "\n\n" + fallback if summary else fallback
 
-        # 阶段2：并行拉取实时数据
-        stock_data = await self.market_data.fetch_stocks_detail(codes)
-        if not stock_data:
-            logger.warning("两阶段推荐：实时数据全部拉取失败，降级普通对话")
-            return await self._unified_chat_with_snapshot(message, ctx)
-
-        # 阶段3：基于实时数据让 LLM 做最终分析
-        system_prompt = _load_template("unified.txt")
-        profile_text = self.market_data._format_user_profile(ctx)
-
-        analysis_content = (
-            f"{profile_text}\n\n"
-            f"【候选股票实时数据】\n\n{stock_data}\n\n"
-            f"【用户需求】\n{message}\n\n"
-            f"请基于以上实时数据，从候选中筛选最值得推荐的 3-5 只，"
-            f"淘汰技术面不佳或资金流出明显的。"
-            f"给出每只的操作建议和理由。"
-        )
-        analysis_messages = [{"role": "user", "content": analysis_content}]
-
-        raw = await self.minimax.chat(
-            system_prompt=system_prompt,
-            messages=analysis_messages,
-        )
-
-        clean_text, actions = extract_actions(raw)
-        return clean_text
+        return self.recommend_svc.format_response(recs, summary)
 
     @staticmethod
     def _parse_picks(raw: str) -> list[str]:
@@ -183,16 +159,41 @@ class ChatService:
         # 深度分析（代码）
         m = _DEEP_RE.search(msg)
         if m:
-            return await self.analysis.analyze_stock_deep(m.group(1))
+            from domain.models.research_depth import ResearchDepth
+            return await self.analysis.analyze_stock_deep(
+                m.group(1), depth=ResearchDepth.DEEP, wechat_id=wechat_id,
+            )
 
         # 深度分析（名称）
         m = _DEEP_NAME_RE.search(msg)
         if m:
+            from domain.models.research_depth import ResearchDepth
             from infrastructure.akshare_client import AKShareClient
             code = await AKShareClient().resolve_stock_name(m.group(1))
             if code:
-                return await self.analysis.analyze_stock_deep(code)
+                return await self.analysis.analyze_stock_deep(
+                    code, depth=ResearchDepth.DEEP, wechat_id=wechat_id,
+                )
             return f"未找到「{m.group(1)}」对应的股票，请用6位代码重试。"
+
+        # 快速分析（代码）
+        m = _QUICK_RE.search(msg)
+        if m:
+            from domain.models.research_depth import ResearchDepth
+            return await self.analysis.analyze_stock_deep(
+                m.group(1), depth=ResearchDepth.QUICK, wechat_id=wechat_id,
+            )
+
+        # 快速分析（名称）
+        m = _QUICK_NAME_RE.search(msg)
+        if m:
+            from domain.models.research_depth import ResearchDepth
+            from infrastructure.akshare_client import AKShareClient
+            code = await AKShareClient().resolve_stock_name(m.group(1))
+            if code:
+                return await self.analysis.analyze_stock_deep(
+                    code, depth=ResearchDepth.QUICK, wechat_id=wechat_id,
+                )
 
         # 回测
         if any(kw in msg for kw in _BACKTEST_KW):

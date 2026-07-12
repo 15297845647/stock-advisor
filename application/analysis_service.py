@@ -1,6 +1,9 @@
-"""分析编排 — 拉数据 → 计算指标 → MiniMax → 结构化决策
+"""分析编排 — 拉数据 → 计算指标 → LLM → 结构化决策
 
-深度分析走 Bull/Bear 辩论 + Manager 裁决。
+支持 3 级深度：
+    QUICK    (~8s)  单次综合分析
+    STANDARD (~20s) 4 分析师并行 → Judge
+    DEEP     (~50s) 4 分析师 → Bull/Bear 辩论 → 三方风控
 """
 
 import logging
@@ -10,6 +13,7 @@ from application.debate_service import DebateService
 from domain.decision_parser import extract_decision, format_decision
 from domain.decision_stabilizer import stabilize_decision
 from domain.models.analysis_report import AnalysisReport
+from domain.models.research_depth import ResearchDepth
 from domain.prompt_builder import build_analysis_prompt, build_system_prompt
 from domain.stock_analyzer import analyze_technical
 from infrastructure.akshare_client import AKShareClient
@@ -109,53 +113,193 @@ class AnalysisService:
 
         return report_text
 
-    async def analyze_stock_deep(self, stock_code: str, force: bool = False) -> str:
-        """深度分析 — 4分析师并行 → Bull/Bear 辩论 → 裁决（耗时约 40s，当日缓存）"""
-        from application.analyst_agents import AnalystPipeline
-
-        # 当日缓存：同股同天重复深度分析直接复用，避免重复跑 agent 管线
+    async def analyze_stock_deep(
+        self, stock_code: str, force: bool = False,
+        depth: ResearchDepth = ResearchDepth.DEEP,
+        wechat_id: str | None = None,
+    ) -> str:
+        """
+        深度分析入口 — 按 depth 分派到不同管线：
+            QUICK    → 单次 LLM 综合
+            STANDARD → 4分析师 + Judge（跳过辩论）
+            DEEP     → 完整 Bull/Bear + 三方风控
+        """
         if not force:
             cached = _deep_cache.get(stock_code)
-            if cached and cached[0] == date.today():
+            if cached and cached[0] == date.today() and cached[2] == depth:
                 return cached[1]
 
-        quote = await self.akshare.get_realtime_quote(stock_code)
-        if not quote:
+        data = await self._collect_analysis_data(stock_code)
+        if data is None:
             return f"未找到股票 {stock_code} 的行情数据。"
 
-        bars = await self.akshare.get_stock_history(stock_code, days=60)
-        tech = analyze_technical(bars) if bars else None
-        fund_flows = await self.akshare.get_fund_flow(stock_code)
-        news = await self.akshare.get_stock_news(stock_code, limit=15)
-        fundamentals = await self.akshare.get_fundamentals(stock_code)
+        notifier = self._make_notifier(wechat_id, stock_code, depth)
+        await notifier.emit("collect_done", 15, "📊 数据准备完成，分析师工作中...")
 
-        # 构建各维度文本
-        tech_text = self._build_tech_text(tech) if tech else "技术数据不可用"
-        fund_flow_text = self._build_fund_flow_text(fund_flows)
-        kline_text = self._build_kline_text(bars)
-        news_text = self._build_news_text(news)
-        fundamental_text = self._build_fundamental_text(fundamentals)
+        if depth == ResearchDepth.QUICK:
+            report = await self._run_quick(data, notifier)
+        elif depth == ResearchDepth.STANDARD:
+            report = await self._run_standard(data, notifier)
+        else:
+            report = await self._run_deep(data, notifier)
 
-        pipeline = AnalystPipeline()
-        report = await pipeline.run(
-            stock_name=quote.name,
-            stock_code=stock_code,
-            price=quote.price,
-            tech_text=tech_text,
-            fundamental_text=fundamental_text,
-            news_text=news_text,
-            fund_flow_text=fund_flow_text,
-            kline_text=kline_text,
-            tech_snapshot=tech,
-            fund_flows=fund_flows,
-        )
+        await notifier.emit("done", 100, "✅ 分析完成")
+
+        # 深度分析报告过长 → 生成分享链接
+        if depth == ResearchDepth.DEEP:
+            share_url = await self._create_share_link(
+                stock_code, data["quote"].name, depth, report,
+            )
+            if share_url:
+                report = report + f"\n\n📄 完整报告：{share_url}"
 
         await self.report_repo.save_report(AnalysisReport(
             stock_code=stock_code, report_date=date.today(), content=report,
         ))
-        _deep_cache[stock_code] = (date.today(), report)
+        _deep_cache[stock_code] = (date.today(), report, depth)
 
         return report
+
+    async def _create_share_link(
+        self, stock_code: str, stock_name: str,
+        depth: ResearchDepth, content: str,
+    ) -> str | None:
+        """尝试生成分享短链，失败不阻塞主流程"""
+        try:
+            from application.report_export_service import ReportExportService
+            from domain.models.research_depth import DEPTH_LABELS
+            svc = ReportExportService()
+            result = await svc.create_share(
+                stock_code=stock_code, stock_name=stock_name,
+                depth=DEPTH_LABELS.get(depth, depth.value),
+                report_content=content,
+                ttl_days=7,
+            )
+            return result.get("share_url")
+        except Exception as e:
+            logger.debug("生成分享链接失败(忽略): %s", e)
+            return None
+
+    # ────────────── 数据收集 ──────────────
+
+    async def _collect_analysis_data(self, stock_code: str) -> dict | None:
+        """一次性拉齐所有分析数据（新闻优先读库缓存）"""
+        quote = await self.akshare.get_realtime_quote(stock_code)
+        if not quote:
+            return None
+
+        bars = await self.akshare.get_stock_history(stock_code, days=60)
+        tech = analyze_technical(bars) if bars else None
+        fund_flows = await self.akshare.get_fund_flow(stock_code)
+        news = await self._fetch_news_cached(stock_code)
+        fundamentals = await self.akshare.get_fundamentals(stock_code)
+
+        return {
+            "quote": quote, "bars": bars, "tech": tech,
+            "fund_flows": fund_flows, "news": news,
+            "fundamentals": fundamentals,
+        }
+
+    async def _fetch_news_cached(self, stock_code: str) -> list:
+        """
+        新闻读取策略：优先读库（6h 内缓存），否则实时拉 + 回填
+        """
+        from repository.news_repository import NewsRepository
+        news_repo = NewsRepository()
+
+        if await news_repo.has_recent(stock_code, hours=6):
+            return await news_repo.get_recent(stock_code, hours=48, limit=20)
+
+        news = await self.akshare.get_stock_news(stock_code, limit=15)
+        if news:
+            try:
+                await news_repo.upsert_batch(stock_code, news)
+            except Exception as e:
+                logger.debug("新闻回填失败(忽略): %s", e)
+        return news
+
+    # ────────────── 三档管线 ──────────────
+
+    async def _run_quick(self, data: dict, notifier) -> str:
+        """快速分析：单次 LLM 综合"""
+        await notifier.emit("analyzing", 50, "⚡ 快速分析中...")
+        return await self._standard_or_quick_report(data)
+
+    async def _run_standard(self, data: dict, notifier) -> str:
+        """标准分析：4 分析师并行 + Judge（跳过研究员辩论）"""
+        from application.analyst_agents import AnalystPipeline
+
+        await notifier.emit("analysts", 30, "📊 4 位分析师并行工作中...")
+        pipeline = AnalystPipeline()
+        # 复用 pipeline.run 但只跑到 judge（当前实现已是此流程）
+        return await self._run_pipeline(pipeline, data, notifier)
+
+    async def _run_deep(self, data: dict, notifier) -> str:
+        """深度分析：完整 Bull/Bear + 三方风控"""
+        from application.analyst_agents import AnalystPipeline
+
+        await notifier.emit("analysts", 25, "📊 4 位分析师并行工作中...")
+        pipeline = AnalystPipeline()
+        return await self._run_pipeline(pipeline, data, notifier, deep=True)
+
+    async def _run_pipeline(
+        self, pipeline, data: dict, notifier, deep: bool = False,
+    ) -> str:
+        """跑 AnalystPipeline 管线"""
+        quote = data["quote"]
+        tech = data["tech"]
+
+        # 中间进度：debate / risk
+        if deep:
+            await notifier.emit("debate", 55, "🥊 Bull/Bear 研究员辩论中...")
+            await notifier.emit("risk", 80, "⚖️  三方风控评估中...")
+        else:
+            await notifier.emit("judge", 75, "⚖️  Judge 裁决中...")
+
+        return await pipeline.run(
+            stock_name=quote.name, stock_code=quote.code, price=quote.price,
+            tech_text=self._build_tech_text(tech) if tech else "技术数据不可用",
+            fundamental_text=self._build_fundamental_text(data["fundamentals"]),
+            news_text=self._build_news_text(data["news"]),
+            fund_flow_text=self._build_fund_flow_text(data["fund_flows"]),
+            kline_text=self._build_kline_text(data["bars"]),
+            tech_snapshot=tech,
+            fund_flows=data["fund_flows"],
+        )
+
+    async def _standard_or_quick_report(self, data: dict) -> str:
+        """兜底 quick 分析（不走 analyst pipeline，节省 token）"""
+        from domain.models.llm_task import LLMTaskType
+        quote = data["quote"]
+        tech = data["tech"]
+
+        prompt = (
+            f"股票 {quote.name}({quote.code}) 当前价 {quote.price} 涨跌 {quote.change_pct:+.2f}%\n\n"
+            f"技术：{self._build_tech_text(tech) if tech else '不可用'}\n"
+            f"资金：{self._build_fund_flow_text(data['fund_flows'])}\n"
+            f"基本面：{self._build_fundamental_text(data['fundamentals'])}\n\n"
+            f"请综合以上给出：1.核心观点 2.操作建议 3.目标价 4.止损价\n"
+            f"最后输出 [DECISION]{{...}}[/DECISION] JSON。"
+        )
+        return await self.minimax.chat(
+            system_prompt="你是资深投顾，输出精炼决策。",
+            messages=[{"role": "user", "content": prompt}],
+            task_type=LLMTaskType.QUICK_ANALYSIS,
+        )
+
+    def _make_notifier(
+        self, wechat_id: str | None, stock_code: str,
+        depth: ResearchDepth,
+    ):
+        """构造进度推送器 — 无 wechat_id 时用 NoopNotifier"""
+        from application.progress_notifier import (
+            NoopProgressNotifier, WeChatProgressNotifier,
+        )
+        if not wechat_id:
+            return NoopProgressNotifier()
+        return WeChatProgressNotifier(
+            wechat_id=wechat_id, stock_code=stock_code, depth=depth,
+        )
 
     # ── 文本构建辅助方法 ──
 

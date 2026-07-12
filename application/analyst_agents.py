@@ -13,6 +13,7 @@ import logging
 
 from domain.decision_parser import extract_decision, format_verdict
 from domain.decision_stabilizer import stabilize_decision
+from domain.models.llm_task import LLMTaskType
 from infrastructure.minimax_client import MiniMaxClient
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,16 @@ logger = logging.getLogger(__name__)
 class AnalystPipeline:
     def __init__(self):
         self.minimax = MiniMaxClient()
+
+    async def _llm_chat(
+        self, task_type: LLMTaskType, system_prompt: str, user_content: str,
+    ) -> str:
+        """带 task_type 埋点的 LLM 调用"""
+        return await self.minimax.chat(
+            system_prompt=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+            task_type=task_type,
+        )
 
     async def run(
         self,
@@ -94,64 +105,64 @@ class AnalystPipeline:
         return header + format_verdict(decision, price, tech_snapshot)
 
     async def _technical_analyst(self, tech_text: str, kline_text: str, name: str) -> str:
-        return await self.minimax.chat(
-            system_prompt="你是专业的技术分析师，擅长趋势研判和关键价位识别。简洁输出。",
-            messages=[{"role": "user", "content":
-                f"请对{name}做技术面分析：\n{tech_text}\n\n近期K线：\n{kline_text}\n\n"
-                f"输出：1.趋势判断 2.关键价位 3.技术信号 4.短期方向判断"}],
+        return await self._llm_chat(
+            LLMTaskType.TECHNICAL_ANALYST,
+            "你是专业的技术分析师，擅长趋势研判和关键价位识别。简洁输出。",
+            f"请对{name}做技术面分析：\n{tech_text}\n\n近期K线：\n{kline_text}\n\n"
+            f"输出：1.趋势判断 2.关键价位 3.技术信号 4.短期方向判断",
         )
 
     async def _fundamental_analyst(self, fundamental_text: str, name: str) -> str:
-        return await self.minimax.chat(
-            system_prompt="你是专业的基本面分析师，擅长财务分析和估值判断。简洁输出。",
-            messages=[{"role": "user", "content":
-                f"请对{name}做基本面分析：\n{fundamental_text}\n\n"
-                f"输出：1.估值水平 2.盈利能力 3.成长性 4.财务健康度"}],
+        return await self._llm_chat(
+            LLMTaskType.FUNDAMENTAL_ANALYST,
+            "你是专业的基本面分析师，擅长财务分析和估值判断。简洁输出。",
+            f"请对{name}做基本面分析：\n{fundamental_text}\n\n"
+            f"输出：1.估值水平 2.盈利能力 3.成长性 4.财务健康度",
         )
 
     async def _news_analyst(self, news_text: str, name: str) -> str:
-        return await self.minimax.chat(
-            system_prompt="你是专业的消息面分析师，擅长解读新闻和公告对股价的影响。简洁输出。",
-            messages=[{"role": "user", "content":
-                f"请解读{name}的近期消息面：\n{news_text}\n\n"
-                f"输出：1.利好因素 2.利空因素 3.消息面总体倾向(利好/利空/中性)"}],
+        return await self._llm_chat(
+            LLMTaskType.NEWS_ANALYST,
+            "你是专业的消息面分析师，擅长解读新闻和公告对股价的影响。简洁输出。",
+            f"请解读{name}的近期消息面：\n{news_text}\n\n"
+            f"输出：1.利好因素 2.利空因素 3.消息面总体倾向(利好/利空/中性)",
         )
 
     async def _capital_analyst(self, fund_flow_text: str, name: str) -> str:
-        return await self.minimax.chat(
-            system_prompt="你是专业的资金面分析师，擅长分析主力资金动向。简洁输出。",
-            messages=[{"role": "user", "content":
-                f"请分析{name}的资金流向：\n{fund_flow_text}\n\n"
-                f"输出：1.主力动向 2.资金面强弱 3.是否有主力建仓/出货迹象"}],
+        return await self._llm_chat(
+            LLMTaskType.CAPITAL_ANALYST,
+            "你是专业的资金面分析师，擅长分析主力资金动向。简洁输出。",
+            f"请分析{name}的资金流向：\n{fund_flow_text}\n\n"
+            f"输出：1.主力动向 2.资金面强弱 3.是否有主力建仓/出货迹象",
         )
 
     async def _bull_researcher(self, data: str) -> str:
-        return await self.minimax.chat(
-            system_prompt="你是看涨研究员，擅长发现投资机会。基于数据构建论据，不要空泛。",
-            messages=[{"role": "user", "content":
-                f"基于以下四维分析，构建看涨论证：\n{data}\n\n"
-                f"要求：1.核心看涨逻辑 2.上涨催化剂 3.目标价位 4.反驳看空观点 5.看涨置信度(0-100)"}],
+        return await self._llm_chat(
+            LLMTaskType.BULL_RESEARCHER,
+            "你是看涨研究员，擅长发现投资机会。基于数据构建论据，不要空泛。",
+            f"基于以下四维分析，构建看涨论证：\n{data}\n\n"
+            f"要求：1.核心看涨逻辑 2.上涨催化剂 3.目标价位 4.反驳看空观点 5.看涨置信度(0-100)",
         )
 
     async def _bear_researcher(self, data: str) -> str:
-        return await self.minimax.chat(
-            system_prompt="你是看跌研究员，擅长识别风险。基于数据构建论据，不要空泛。",
-            messages=[{"role": "user", "content":
-                f"基于以下四维分析，构建看跌论证：\n{data}\n\n"
-                f"要求：1.核心风险因素 2.下跌催化剂 3.止损价位 4.反驳看涨观点 5.看跌置信度(0-100)"}],
+        return await self._llm_chat(
+            LLMTaskType.BEAR_RESEARCHER,
+            "你是看跌研究员，擅长识别风险。基于数据构建论据，不要空泛。",
+            f"基于以下四维分析，构建看跌论证：\n{data}\n\n"
+            f"要求：1.核心风险因素 2.下跌催化剂 3.止损价位 4.反驳看涨观点 5.看跌置信度(0-100)",
         )
 
     async def _judge(self, name: str, code: str, price: float, bull: str, bear: str) -> str:
-        return await self.minimax.chat(
-            system_prompt="你是投资组合经理，善于综合多方观点做出理性决策。",
-            messages=[{"role": "user", "content":
-                f"股票：{name}（{code}）当前价：{price}\n\n"
-                f"【看涨论证】\n{bull[:800]}\n\n【看跌论证】\n{bear[:800]}\n\n"
-                f"请综合裁决：1.评估双方论证质量 2.做出投资决策 3.给出目标价和止损价\n\n"
-                f"在最后输出：\n"
-                f'[DECISION]{{"action":"买入/卖出/持有","target_price":目标价,'
-                f'"stop_loss":止损价,"confidence":置信度0到100,'
-                f'"risk_score":风险1到10,"reasoning":"理由",'
-                f'"key_points":["要点1","要点2","要点3"]}}[/DECISION]'}],
+        return await self._llm_chat(
+            LLMTaskType.JUDGE,
+            "你是投资组合经理，善于综合多方观点做出理性决策。",
+            f"股票：{name}（{code}）当前价：{price}\n\n"
+            f"【看涨论证】\n{bull[:800]}\n\n【看跌论证】\n{bear[:800]}\n\n"
+            f"请综合裁决：1.评估双方论证质量 2.做出投资决策 3.给出目标价和止损价\n\n"
+            f"在最后输出：\n"
+            f'[DECISION]{{"action":"买入/卖出/持有","target_price":目标价,'
+            f'"stop_loss":止损价,"confidence":置信度0到100,'
+            f'"risk_score":风险1到10,"reasoning":"理由",'
+            f'"key_points":["要点1","要点2","要点3"]}}[/DECISION]',
         )
 

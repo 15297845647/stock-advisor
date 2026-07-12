@@ -2,14 +2,19 @@
 
 将全量行情缓存格式化为 prompt 友好的文本，供统一对话使用。
 数据依赖 AKShareClient 的 60s 内存缓存，本层不重复缓存。
+
+quote 接口已迁移到 DataSourceManager（支持多源降级）；
+kline/fund_flow 保持现状（后续 phase 迁移）。
 """
 
 import logging
 import re
 
+from domain.models.stock import StockQuote
 from domain.models.user_context import UserContext
 from domain.stock_analyzer import analyze_technical
 from infrastructure.akshare_client import AKShareClient
+from infrastructure.data_source import DataSourceManager, get_data_manager
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +25,25 @@ _STOCK_CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 
 
 class MarketDataService:
-    def __init__(self):
+    def __init__(self, data_manager: DataSourceManager | None = None):
+        # 保留 akshare_client：kline/fund_flow/name-resolve 仍走原路径
         self.akshare = AKShareClient()
+        # quote 接口走多源降级链
+        self._data_manager = data_manager  # 懒加载：首次调用时才拿单例
+
+    def _get_manager(self) -> DataSourceManager:
+        """延迟获取全局单例，避免 import 期建库"""
+        if self._data_manager is None:
+            self._data_manager = get_data_manager()
+        return self._data_manager
+
+    async def _fetch_quote(self, code: str) -> StockQuote | None:
+        """统一 quote 入口 — 走 DataSourceManager 降级链"""
+        result = await self._get_manager().fetch_quote(code)
+        if not result.success:
+            logger.warning("quote 全部降级失败 %s: %s", code, result.error)
+            return None
+        return result.data
 
     async def build_market_context(self, ctx: UserContext, message: str = "") -> str:
         """组装用户画像 + 市场快照 + 个股数据，作为 LLM user message 的前缀上下文"""
@@ -106,7 +128,7 @@ class MarketDataService:
 
     async def _fetch_stock_light(self, code: str) -> str | None:
         """轻量版个股数据（行情+技术指标，不拉资金流向，速度快）"""
-        quote = await self.akshare.get_realtime_quote(code)
+        quote = await self._fetch_quote(code)
         if not quote:
             return None
 
@@ -129,7 +151,7 @@ class MarketDataService:
 
     async def _fetch_single_stock(self, code: str) -> str | None:
         """拉取单只股票的完整数据并格式化"""
-        quote = await self.akshare.get_realtime_quote(code)
+        quote = await self._fetch_quote(code)
         if not quote:
             return None
 

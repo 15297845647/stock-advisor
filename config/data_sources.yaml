@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────
+# 数据源降级链配置
+# ─────────────────────────────────────────────────────
+# 每个 operation 定义一条降级链（按优先级从高到低）。
+# 调用某 operation 时，DataSourceManager 会按顺序尝试
+# 每个 source：熔断中/未启用/失败/返回空 → 自动降级下一个。
+#
+# 修改后：
+#   1. 重启进程；或
+#   2. Admin 后台 → 数据源 → 点击"重载配置"
+# ─────────────────────────────────────────────────────
+
+chains:
+  # 实时行情：五档报价 → 东财全量 → Tushare → 日K兜底(取昨收)
+  quote:
+    - akshare.bid_ask
+    - akshare.spot_em
+    - tushare.quote
+    - akshare.hist
+
+  # K线：东财+腾讯+通达信(现有降级) → Tushare
+  kline:
+    - akshare.hist
+    - tushare.daily
+
+  # 个股资金流：东财 → Tushare
+  fund_flow:
+    - akshare.fund_flow
+    - tushare.money_flow
+
+  # 板块资金流：仅东财（无备胎，失败即失败）
+  sector_flow:
+    - akshare.sector_flow
+
+  # 个股新闻：仅东财（无备胎）
+  news:
+    - akshare.news
+
+# ─────────────────────────────────────────────────────
+# 熔断器配置
+# threshold: 连续失败次数触发熔断
+# cooldown : 熔断持续秒数
+# ─────────────────────────────────────────────────────
+circuit_breaker:
+  akshare.bid_ask:      { threshold: 3, cooldown: 300 }
+  akshare.spot_em:      { threshold: 3, cooldown: 300 }
+  akshare.spot:         { threshold: 3, cooldown: 300 }
+  akshare.hist:         { threshold: 5, cooldown: 600 }   # 更宽松（用得多）
+  akshare.fund_flow:    { threshold: 3, cooldown: 300 }
+  akshare.sector_flow:  { threshold: 3, cooldown: 600 }
+  akshare.news:         { threshold: 3, cooldown: 300 }
+  tushare.quote:        { threshold: 3, cooldown: 300 }
+  tushare.daily:        { threshold: 3, cooldown: 300 }
+  tushare.money_flow:   { threshold: 3, cooldown: 300 }
+
+# ─────────────────────────────────────────────────────
+# Tushare 全局开关
+# 需要在 .env 或后台配置管理设置 TUSHARE_TOKEN
+# 积分 >= 2000 才能调 moneyflow / realtime_quote
+# ─────────────────────────────────────────────────────
+tushare:
+  enabled: true
+  token_env: TUSHARE_TOKEN

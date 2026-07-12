@@ -1,21 +1,38 @@
+"""LLM 客户端（OpenAI Chat Completions 兼容）
+
+**已弃用**：新代码请用 `infrastructure.llm.LLMRouter`，
+本类保留为向后兼容 shim — 内部委托给 LLMRouter，
+task_type 默认走 CHAT，无法细分成本。
+"""
+
 import logging
 
 import httpx
 
 from agent.config import get_llm_config
+from domain.models.llm_task import LLMRequest, LLMTaskType
 
 logger = logging.getLogger(__name__)
 
 
 class MiniMaxClient:
-    """LLM 客户端（OpenAI Chat Completions 兼容格式）
+    """LLM 客户端（兼容 shim）
 
-    支持 DeepSeek / OpenAI / 任何 OpenAI 兼容 API。
-    每次请求从 config 读取最新配置，后台热更新立即生效。
+    历史遗留接口，内部委托 LLMRouter。
+    新代码请直接调用 `get_llm_router().chat(LLMRequest(...))`。
     """
 
     def __init__(self):
+        # 保留 httpx.AsyncClient 只是为了避免破坏可能的直接引用
         self.client = httpx.AsyncClient(timeout=180)
+        self._router = None
+
+    def _get_router(self):
+        """延迟获取 LLMRouter 单例"""
+        if self._router is None:
+            from infrastructure.llm import get_llm_router
+            self._router = get_llm_router()
+        return self._router
 
     async def chat(
         self,
@@ -23,71 +40,20 @@ class MiniMaxClient:
         messages: list[dict],
         max_tokens: int = 4096,
         retries: int = 1,
+        task_type: LLMTaskType | None = None,
+        wechat_id: str | None = None,
     ) -> str:
-        """发送对话请求（OpenAI Chat Completions 格式），返回文本响应"""
-        cfg = get_llm_config()
-        base_url = cfg["base_url"].rstrip("/")
-        url = f"{base_url}/chat/completions"
-
-        headers = {
-            "Authorization": f"Bearer {cfg['api_key']}",
-            "Content-Type": "application/json",
-        }
-
-        full_messages = [{"role": "system", "content": system_prompt}]
-        full_messages.extend(messages)
-
-        payload = {
-            "model": cfg["model"],
-            "max_tokens": max_tokens,
-            "messages": full_messages,
-            "stream": False,
-        }
-
-        last_err = None
-        for attempt in range(retries + 1):
-            try:
-                resp = await self.client.post(url, headers=headers, json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-                return self._extract_response_text(data)
-            except httpx.ReadTimeout as e:
-                last_err = e
-                if attempt < retries:
-                    logger.warning("LLM 超时(第%d次)，重试中...", attempt + 1)
-                    continue
-            except httpx.HTTPStatusError as e:
-                logger.error("LLM API HTTP error: %s — %s", e.response.status_code, e.response.text[:500])
-                raise
-
-        raise last_err  # type: ignore[misc]
-
-    @staticmethod
-    def _extract_response_text(data: dict) -> str:
-        """从 OpenAI 格式响应中提取文本"""
-        choices = data.get("choices", [])
-        if choices:
-            msg = choices[0].get("message", {})
-            content = msg.get("content")
-            if content:
-                return content
-
-        # 兼容 Anthropic 格式降级
-        content = data.get("content", [])
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict):
-                    if block.get("type") == "thinking":
-                        continue
-                    if block.get("type") == "text" and "text" in block:
-                        return block["text"]
-                if isinstance(block, str):
-                    return block
-        if isinstance(content, str):
-            return content
-
-        logger.error("LLM API unknown response: %s", str(data)[:500])
-        raise ValueError("无法解析 LLM 返回格式")
+        """委托给 LLMRouter；未指定 task_type 时按 CHAT 处理"""
+        req = LLMRequest(
+            task_type=task_type or LLMTaskType.CHAT,
+            system_prompt=system_prompt,
+            messages=list(messages),
+            max_tokens=max_tokens,
+            retries=retries,
+            wechat_id=wechat_id,
+        )
+        resp = await self._get_router().chat(req)
+        return resp.content
 
     async def close(self):
         await self.client.aclose()
