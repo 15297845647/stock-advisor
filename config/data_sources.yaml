@@ -11,28 +11,28 @@
 # ─────────────────────────────────────────────────────
 
 chains:
-  # 实时行情：五档报价 → 东财全量 → Tushare → 日K兜底(取昨收)
+  # 实时行情：Tushare 首选（付费代理更稳）→ AKShare 系列兜底
   quote:
+    - tushare.quote
     - akshare.bid_ask
     - akshare.spot_em
-    - tushare.quote
     - akshare.hist
 
-  # K线：东财+腾讯+通达信(现有降级) → Tushare
+  # K线：Tushare 首选 → AKShare 多层降级(东财/腾讯/通达信)
   kline:
-    - akshare.hist
     - tushare.daily
+    - akshare.hist
 
-  # 个股资金流：东财 → Tushare
+  # 个股资金流：Tushare 首选 → AKShare 兜底
   fund_flow:
-    - akshare.fund_flow
     - tushare.money_flow
+    - akshare.fund_flow
 
-  # 板块资金流：仅东财（无备胎，失败即失败）
+  # 板块资金流：仅 AKShare（Tushare 板块接口需要更高积分）
   sector_flow:
     - akshare.sector_flow
 
-  # 个股新闻：仅东财（无备胎）
+  # 个股新闻：仅 AKShare
   news:
     - akshare.news
 
