@@ -13,9 +13,12 @@ from agent.config import (
     ADMIN_PASSWORD,
     DB_PATH,
     ENV_FILE_PATH,
+    all_provider_configs,
     get_llm_config,
+    get_provider_env_map,
     get_tushare_config,
     update_llm_config,
+    update_provider_config,
     update_tushare_config,
 )
 from infrastructure.database import get_connection
@@ -310,39 +313,61 @@ async def api_restart_cc():
 
 @router.get("/config", dependencies=[Depends(verify_token)])
 async def get_config():
-    """读取当前 LLM + Tushare 配置（脱敏）"""
+    """读取当前 LLM (含分 provider) + Tushare 配置（api_key 脱敏）"""
     cfg = get_llm_config()
     ts_cfg = get_tushare_config()
+    providers = all_provider_configs()
+
     return {
+        # 默认 LLM（向后兼容）
         "llm_api_key": _mask_key(cfg["api_key"]),
         "llm_base_url": cfg["base_url"],
         "llm_model": cfg["model"],
+        # 各 provider 独立配置
+        "providers": {
+            name: {
+                "api_key": _mask_key(pc.get("api_key", "")),
+                "base_url": pc.get("base_url", ""),
+                "has_key": bool(pc.get("api_key")),
+            }
+            for name, pc in providers.items()
+        },
+        # 其他
         "tushare_token": _mask_key(ts_cfg["token"]),
         "db_path": DB_PATH,
         "admin_port": int(os.getenv("ADMIN_PORT", "8900")),
     }
 
 
+class ProviderConfigInput(BaseModel):
+    """单个 provider 配置输入"""
+    api_key: str | None = None
+    base_url: str | None = None
+
+
 class UpdateConfigRequest(BaseModel):
+    # 默认 LLM 配置（向后兼容 + default provider 兜底）
     llm_api_key: str | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    # 各 provider 独立配置（推荐使用）
+    providers: dict[str, ProviderConfigInput] | None = None
+    # 其他
     tushare_token: str | None = None
     admin_password: str | None = None
 
 
 @router.put("/config", dependencies=[Depends(verify_token)])
 async def update_config(req: UpdateConfigRequest):
-    """修改 LLM/Tushare 配置，立即热生效 + 持久化到 .env"""
+    """修改 LLM/Provider/Tushare 配置，立即热生效 + 持久化到 .env"""
     env_path = ENV_FILE_PATH
     env_map = _read_env_file(env_path)
 
-    if req.llm_api_key:
-        env_map["LLM_API_KEY"] = req.llm_api_key
-    if req.llm_base_url:
-        env_map["LLM_BASE_URL"] = req.llm_base_url
-    if req.llm_model:
-        env_map["LLM_MODEL"] = req.llm_model
+    # 默认 LLM
+    _apply_default_llm(env_map, req)
+    # 各 provider
+    _apply_providers(env_map, req.providers)
+    # 其他
     if req.tushare_token:
         env_map["TUSHARE_TOKEN"] = req.tushare_token
     if req.admin_password:
@@ -350,15 +375,57 @@ async def update_config(req: UpdateConfigRequest):
 
     _write_env_file(env_path, env_map)
 
-    # 热更新运行时配置（立即生效，无需重启）
+    # 热更新运行时配置（LLMRouter 通过 getter 动态读，立即生效）
     update_llm_config(
         api_key=req.llm_api_key,
         base_url=req.llm_base_url,
         model=req.llm_model,
     )
+    _hot_update_providers(req.providers)
     update_tushare_config(token=req.tushare_token)
 
     return {"ok": True, "message": "配置已保存并立即生效"}
+
+
+def _apply_default_llm(env_map: dict, req: UpdateConfigRequest) -> None:
+    """把默认 LLM 字段写入 env_map"""
+    if req.llm_api_key:
+        env_map["LLM_API_KEY"] = req.llm_api_key
+    if req.llm_base_url:
+        env_map["LLM_BASE_URL"] = req.llm_base_url
+    if req.llm_model:
+        env_map["LLM_MODEL"] = req.llm_model
+
+
+def _apply_providers(
+    env_map: dict, providers: dict[str, ProviderConfigInput] | None,
+) -> None:
+    """把各 provider 字段写入 env_map"""
+    if not providers:
+        return
+
+    env_key_map = get_provider_env_map()
+    for name, pcfg in providers.items():
+        if name not in env_key_map:
+            continue
+        keys = env_key_map[name]
+        if pcfg.api_key:
+            env_map[keys["api_key"]] = pcfg.api_key
+        if pcfg.base_url:
+            env_map[keys["base_url"]] = pcfg.base_url
+
+
+def _hot_update_providers(
+    providers: dict[str, ProviderConfigInput] | None,
+) -> None:
+    """热更新运行时 provider 配置"""
+    if not providers:
+        return
+
+    for name, pcfg in providers.items():
+        update_provider_config(
+            name, api_key=pcfg.api_key, base_url=pcfg.base_url,
+        )
 
 
 # ────────────────────── 策略配置 ──────────────────────

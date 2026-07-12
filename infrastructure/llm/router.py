@@ -190,7 +190,10 @@ def reload_llm_router() -> LLMRouter:
 
 
 def _build_default_router() -> LLMRouter:
-    """从默认配置构造 router"""
+    """
+    从默认配置构造 router — provider 的 key/url 通过 getter 动态读取，
+    Admin 后台改配置后立即生效。
+    """
     from agent.config import PROJECT_ROOT
     from infrastructure.llm.openai_compat_provider import OpenAICompatProvider
     from repository.llm_usage_repository import LLMUsageRepository
@@ -200,13 +203,12 @@ def _build_default_router() -> LLMRouter:
 
     providers: dict[str, LLMProvider] = {}
     for name, pcfg in policy.all_providers().items():
-        api_key = os.getenv(pcfg.api_key_env, "").strip()
-        # 兜底：如果指定环境变量没值，尝试 LLM_API_KEY（向后兼容）
-        if not api_key:
-            api_key = os.getenv("LLM_API_KEY", "").strip()
+        key_getter, url_getter = _make_getters(name, pcfg)
         providers[name] = OpenAICompatProvider(
-            name=name, base_url=pcfg.base_url,
-            api_key=api_key, enabled=pcfg.enabled,
+            name=name,
+            base_url_getter=url_getter,
+            api_key_getter=key_getter,
+            enabled=pcfg.enabled,
         )
 
     cost_calc = CostCalculator(policy)
@@ -214,7 +216,49 @@ def _build_default_router() -> LLMRouter:
 
     router = LLMRouter(policy, providers, cost_calc, usage_repo)
     logger.info(
-        "LLMRouter 已构造: %d providers (%d 启用)",
-        len(providers), sum(1 for p in providers.values() if p.is_available()),
+        "LLMRouter 已构造: %d providers (启用: %s)",
+        len(providers),
+        [n for n, p in providers.items() if p.is_available()],
     )
     return router
+
+
+def _make_getters(provider_name: str, policy_cfg):
+    """
+    构造 (key_getter, url_getter) — 优先读运行时配置，兜底用 policy + env
+    - key: agent.config.get_provider_config → policy.api_key_env → LLM_API_KEY
+    - url: agent.config.get_provider_config → policy.base_url
+    """
+    from agent.config import get_llm_config, get_provider_config
+
+    def _get_key() -> str:
+        cfg = get_provider_config(provider_name)
+        if cfg.get("api_key"):
+            return cfg["api_key"]
+
+        # 尝试从环境变量读（可能启动后被更新）
+        env_key = os.getenv(policy_cfg.api_key_env, "").strip()
+        if env_key:
+            return env_key
+
+        # 兜底：default provider 用 LLM_API_KEY
+        if provider_name == "default":
+            return get_llm_config().get("api_key", "")
+
+        return ""
+
+    def _get_url() -> str:
+        cfg = get_provider_config(provider_name)
+        if cfg.get("base_url"):
+            return cfg["base_url"]
+
+        if policy_cfg.base_url:
+            return policy_cfg.base_url
+
+        # default provider 用 LLM_BASE_URL 兜底
+        if provider_name == "default":
+            return get_llm_config().get("base_url", "")
+
+        return ""
+
+    return _get_key, _get_url

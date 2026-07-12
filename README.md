@@ -196,24 +196,31 @@ pip install -r requirements.txt
 
 ### 第二步：填写 API Key
 
+**推荐方式：管理后台配置**（无需改文件）
+
+首次只需要在 `.env` 里设一个 `ADMIN_PASSWORD`：
+
 ```bash
 cp .env.example .env
-open .env
+open .env    # 只改 ADMIN_PASSWORD
 ```
 
-至少要填一个 LLM Key。推荐组合：
+然后启动 admin，在浏览器里配置所有 Key（LLM 供应商 / Tushare / 管理密码）—— 保存后立即生效、自动同步写入 `.env` 持久化，无需重启。
 
-```
-# DeepSeek（主力，便宜）
-DEEPSEEK_API_KEY=sk-xxxx
+**旧方式：直接编辑 `.env`**（可选）
 
-# Qwen（备胎，可选）
-DASHSCOPE_API_KEY=sk-xxxx
+如果你想一次性从命令行配好：
 
-# 兜底（旧变量，向后兼容）
+```env
+# 各 LLM 供应商 Key（LLMRouter 按 task 分发；至少填一个）
+DEEPSEEK_API_KEY=sk-xxxx      # 推荐主力，便宜
+DASHSCOPE_API_KEY=sk-xxxx     # Qwen 通义千问（可选备胎）
+MINIMAX_API_KEY=sk-xxxx       # MiniMax（可选）
+
+# 兜底（旧变量，default provider 使用）
 LLM_API_KEY=sk-xxxx
 
-# Tushare token（可选，无 token 时 tushare 源自动禁用）
+# Tushare token（可选，用于期货 + 数据源降级 fallback）
 TUSHARE_TOKEN=your_tushare_token
 
 # 管理后台密码
@@ -303,7 +310,7 @@ cc-connect
 - **数据源** ★新 — 健康状态、命中率、降级链分布、失败日志、手动重置熔断、热重载配置
 - **LLM 用量** ★新 — 通过 `/api/usage/dashboard`、`/api/usage/daily` 查看
 - **日志查看** — 日志文件、级别过滤、关键词搜索
-- **配置管理** — LLM Key、Tushare Token、管理密码
+- **配置管理** ★升级 — 分 provider 独立配置 LLM Key（DeepSeek/Qwen/MiniMax）+ Tushare Token + 管理密码。保存后**动态生效**（LLMRouter 每次调用重读 key，无需重启）+ 自动落盘到 `.env`
 
 ---
 

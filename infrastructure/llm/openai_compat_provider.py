@@ -1,10 +1,14 @@
 """OpenAI 兼容协议 Provider — 覆盖 DeepSeek / Qwen / MiniMax / OpenAI 等
 
 单一职责：调用 OpenAI Chat Completions 兼容协议，解析响应。
-所有走 `/chat/completions` 的服务都用这一个类，通过 base_url 区分。
+
+设计要点：
+    api_key / base_url 通过 callable 动态读取 —
+    Admin 后台修改配置后立即生效，无需重启进程。
 """
 
 import logging
+from typing import Callable
 
 import httpx
 
@@ -15,22 +19,46 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAICompatProvider(LLMProvider):
-    """OpenAI 兼容协议实现"""
+    """OpenAI 兼容协议实现（动态配置版）"""
 
     def __init__(
-        self, name: str, base_url: str, api_key: str, enabled: bool = True,
+        self, name: str,
+        base_url_getter: Callable[[], str],
+        api_key_getter: Callable[[], str],
+        enabled: bool = True,
     ):
-        super().__init__(base_url, api_key, enabled)
+        # 父类需要 base_url/api_key 字段，这里传空占位（真正调用时用 getter）
+        super().__init__(base_url="", api_key="", enabled=enabled)
         self.name = name
+        self._get_url = base_url_getter
+        self._get_key = api_key_getter
         self._client = httpx.AsyncClient(timeout=180)
+
+    # ── 覆盖基类的可用性判断（动态读 key）──
+
+    def is_available(self) -> bool:
+        try:
+            return self.enabled and bool(self._get_key())
+        except Exception:
+            return False
+
+    # ── 主接口 ──
 
     async def chat(
         self, req: LLMRequest, model: str,
     ) -> tuple[str, int, int]:
         """POST /chat/completions，返回 (content, prompt_tokens, completion_tokens)"""
+        base_url = (self._get_url() or "").rstrip("/")
+        api_key = self._get_key() or ""
+
+        if not base_url:
+            raise RuntimeError(f"{self.name}: base_url 未配置")
+        if not api_key:
+            raise RuntimeError(f"{self.name}: api_key 未配置")
+
         payload = self._build_payload(req, model)
-        headers = self._build_headers()
-        url = f"{self.base_url}/chat/completions"
+        headers = self._build_headers(api_key)
+        url = f"{base_url}/chat/completions"
 
         resp = await self._client.post(url, headers=headers, json=payload)
         if resp.status_code >= 400:
@@ -57,9 +85,10 @@ class OpenAICompatProvider(LLMProvider):
             "stream": False,
         }
 
-    def _build_headers(self) -> dict:
+    @staticmethod
+    def _build_headers(api_key: str) -> dict:
         return {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 

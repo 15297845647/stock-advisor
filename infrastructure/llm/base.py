@@ -9,17 +9,22 @@ from domain.models.llm_task import LLMRequest
 
 
 class LLMProvider(ABC):
-    """LLM 供应商抽象接口"""
+    """LLM 供应商抽象接口
+
+    子类可选择静态 key（api_key 参数）或动态 key（覆盖 is_available + chat 内取值）
+    """
 
     name: str = ""
 
-    def __init__(self, base_url: str, api_key: str, enabled: bool = True):
-        self.base_url = base_url.rstrip("/")
+    def __init__(
+        self, base_url: str = "", api_key: str = "", enabled: bool = True,
+    ):
+        self.base_url = (base_url or "").rstrip("/")
         self.api_key = api_key
         self.enabled = enabled
 
     def is_available(self) -> bool:
-        """是否可用（启用 + 有 key）"""
+        """是否可用（启用 + 有 key）— 子类可覆盖为动态读取"""
         return self.enabled and bool(self.api_key)
 
     @abstractmethod

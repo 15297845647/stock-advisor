@@ -744,25 +744,82 @@
 
         <div x-show="page==='config'" class="fade-in">
           <h2 class="text-xl font-bold mb-6">配置管理</h2>
-          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg">
+          <p class="text-xs text-gray-400 mb-4">
+            所有配置保存后立即生效（LLM 通过动态读取，无需重启进程），并同步写入 <code class="bg-gray-100 px-1 rounded">.env</code> 文件持久化。
+          </p>
+
+          <!-- LLM 供应商配置 -->
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-3xl mb-6">
+            <div class="flex items-center justify-between mb-4">
+              <h3 class="font-medium">LLM 供应商</h3>
+              <span class="text-xs text-gray-400">
+                按 <code class="bg-gray-100 px-1 rounded">config/llm_routing.yaml</code> 的任务路由分发
+              </span>
+            </div>
+
+            <template x-for="(pc, name) in cfg.providers || {}" :key="name">
+              <div class="mb-5 p-4 border border-gray-100 rounded-lg">
+                <div class="flex items-center justify-between mb-3">
+                  <div>
+                    <span class="font-mono font-medium" x-text="name.toUpperCase()"></span>
+                    <span x-show="pc.has_key" class="ml-2 text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded">已配置</span>
+                    <span x-show="!pc.has_key" class="ml-2 text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded">未配置</span>
+                  </div>
+                  <span class="text-xs text-gray-400 font-mono" x-text="`当前 key: ${pc.api_key || '未设置'}`"></span>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="text-xs text-gray-500 block mb-1">API Key（留空不修改）</label>
+                    <input type="text" x-model="providerInputs[name].api_key"
+                           :placeholder="pc.has_key ? '已配置，留空不修改' : '在此填入 key'"
+                           class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                  </div>
+                  <div>
+                    <label class="text-xs text-gray-500 block mb-1">Base URL</label>
+                    <input type="text" x-model="providerInputs[name].base_url"
+                           :placeholder="pc.base_url"
+                           class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <div class="text-xs text-gray-400 mt-3">
+              💡 提示：至少配置 <code class="bg-gray-100 px-1 rounded">deepseek</code> 以启用推荐/分析（用得最多）。
+              其他 provider 用作 fallback 或按任务分发（在 llm_routing.yaml 中调整）。
+            </div>
+          </div>
+
+          <!-- 默认 LLM 兜底 + 其他 -->
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-3xl mb-6">
+            <h3 class="font-medium mb-4">默认 LLM（兜底）+ 其他配置</h3>
             <div class="space-y-4">
               <div>
-                <label class="text-sm text-gray-500 block mb-1">LLM API Key</label>
+                <label class="text-sm text-gray-500 block mb-1">
+                  默认 LLM API Key
+                  <span class="text-xs text-gray-400 ml-2">— 用于 default provider 兜底，向后兼容</span>
+                </label>
                 <input type="text" x-model="cfg.llm_api_key" placeholder="当前值（脱敏）"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">LLM Base URL</label>
-                <input type="text" x-model="cfg.llm_base_url"
-                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">默认 LLM Base URL</label>
+                  <input type="text" x-model="cfg.llm_base_url"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                </div>
+                <div>
+                  <label class="text-sm text-gray-500 block mb-1">默认 LLM Model</label>
+                  <input type="text" x-model="cfg.llm_model"
+                         class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
+                </div>
               </div>
+              <hr class="border-gray-100">
               <div>
-                <label class="text-sm text-gray-500 block mb-1">LLM Model</label>
-                <input type="text" x-model="cfg.llm_model"
-                       class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
-              </div>
-              <div>
-                <label class="text-sm text-gray-500 block mb-1">Tushare Token（期货数据）</label>
+                <label class="text-sm text-gray-500 block mb-1">
+                  Tushare Token
+                  <span class="text-xs text-gray-400 ml-2">— 期货数据 + 数据源降级 fallback</span>
+                </label>
                 <input type="text" x-model="cfg.tushare_token" placeholder="当前值（脱敏）"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
@@ -772,9 +829,12 @@
                 <input type="password" x-model="newPassword" placeholder="留空则不修改"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
-              <button @click="saveConfig()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存配置</button>
-              <span x-show="cfgSaved" class="text-green-600 text-sm ml-2" x-text="cfgSavedMsg"></span>
             </div>
+          </div>
+
+          <div class="max-w-3xl">
+            <button @click="saveConfig()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存所有配置</button>
+            <span x-show="cfgSaved" class="text-green-600 text-sm ml-3" x-text="cfgSavedMsg"></span>
           </div>
         </div>
 
@@ -828,6 +888,7 @@ function admin() {
     newPassword: '',
     cfgSaved: false,
     cfgSavedMsg: '',
+    providerInputs: {},   // 每个 provider 的编辑草稿
 
     // strategy config
     strategyCfg: {},
@@ -1062,21 +1123,49 @@ function admin() {
     // ── Config ──
     async loadConfig() {
       const d = await this.api('/api/config');
-      if (d) { this.cfg = d; this.newPassword = ''; this.cfgSaved = false; }
+      if (!d) return;
+      this.cfg = d;
+      this.newPassword = '';
+      this.cfgSaved = false;
+      // 为每个 provider 初始化空的编辑草稿
+      this.providerInputs = {};
+      for (const name of Object.keys(d.providers || {})) {
+        this.providerInputs[name] = { api_key: '', base_url: '' };
+      }
     },
 
     async saveConfig() {
       const body = {};
+      // 默认 LLM（未脱敏才提交）
       if (this.cfg.llm_api_key && !this.cfg.llm_api_key.includes('****'))
         body.llm_api_key = this.cfg.llm_api_key;
       if (this.cfg.llm_base_url) body.llm_base_url = this.cfg.llm_base_url;
       if (this.cfg.llm_model) body.llm_model = this.cfg.llm_model;
+
+      // 各 provider（只提交填了新值的）
+      const providers = {};
+      for (const [name, input] of Object.entries(this.providerInputs || {})) {
+        const p = {};
+        if (input.api_key && input.api_key.trim() && !input.api_key.includes('****'))
+          p.api_key = input.api_key.trim();
+        if (input.base_url && input.base_url.trim())
+          p.base_url = input.base_url.trim();
+        if (Object.keys(p).length > 0) providers[name] = p;
+      }
+      if (Object.keys(providers).length > 0) body.providers = providers;
+
+      // Tushare + 密码
       if (this.cfg.tushare_token && !this.cfg.tushare_token.includes('****'))
         body.tushare_token = this.cfg.tushare_token;
       if (this.newPassword) body.admin_password = this.newPassword;
 
       const d = await this.api('/api/config', { method:'PUT', body:JSON.stringify(body) });
-      if (d) { this.cfgSaved = true; this.cfgSavedMsg = d.message || '已保存'; }
+      if (d) {
+        this.cfgSaved = true;
+        this.cfgSavedMsg = d.message || '已保存';
+        // 保存后重新拉取显示最新状态
+        setTimeout(() => this.loadConfig(), 500);
+      }
       setTimeout(() => this.cfgSaved = false, 3000);
     },
 
