@@ -506,9 +506,12 @@ async def update_midlong_config(req: UpdateMidLongConfigRequest):
 
 
 class UpdateScheduleRequest(BaseModel):
-    push_enabled: bool | None = None
-    push_hour: int | None = None
-    push_minute: int | None = None
+    morning_enabled: bool | None = None
+    morning_hour: int | None = None
+    morning_minute: int | None = None
+    afternoon_enabled: bool | None = None
+    afternoon_hour: int | None = None
+    afternoon_minute: int | None = None
 
 
 @router.get("/schedule-config", dependencies=[Depends(verify_token)])
@@ -525,34 +528,37 @@ async def update_schedule_config(req: UpdateScheduleRequest):
 
     data = {k: v for k, v in req.model_dump().items() if v is not None}
 
-    # 时间范围校验
-    if "push_hour" in data and not (0 <= data["push_hour"] <= 23):
-        raise HTTPException(400, "push_hour 须在 0-23 之间")
-    if "push_minute" in data and not (0 <= data["push_minute"] <= 59):
-        raise HTTPException(400, "push_minute 须在 0-59 之间")
+    for field in ("morning_hour", "afternoon_hour"):
+        if field in data and not (0 <= data[field] <= 23):
+            raise HTTPException(400, f"{field} 须在 0-23 之间")
+    for field in ("morning_minute", "afternoon_minute"):
+        if field in data and not (0 <= data[field] <= 59):
+            raise HTTPException(400, f"{field} 须在 0-59 之间")
 
     cfg = await save_schedule_config(data)
-
-    # 动态更新调度器
-    _reschedule_daily_push(cfg)
+    _reschedule_push_jobs(cfg)
 
     return {"ok": True, "config": cfg}
 
 
 @router.post("/schedule-config/test-push", dependencies=[Depends(verify_token)])
-async def test_push():
+async def test_push(task: str = Query("afternoon", description="morning 或 afternoon")):
     """手动触发一次推送（不检查交易日，用于测试）"""
     from scheduler.daily_push import DailyPushScheduler
     pusher = DailyPushScheduler()
     try:
-        await pusher._push_watchlist_analysis()
-        return {"ok": True, "message": "测试推送已执行"}
+        if task == "morning":
+            await pusher._push_recommendations()
+            return {"ok": True, "message": "晨推测试已执行"}
+        else:
+            await pusher._push_watchlist_analysis()
+            return {"ok": True, "message": "午推测试已执行"}
     except Exception as e:
         raise HTTPException(500, f"推送失败: {e}")
 
 
-def _reschedule_daily_push(cfg: dict):
-    """热更新 APScheduler 推送时间"""
+def _reschedule_push_jobs(cfg: dict):
+    """热更新两个推送任务的调度时间"""
     try:
         from apscheduler.triggers.cron import CronTrigger
         from admin.server import app
@@ -561,12 +567,20 @@ def _reschedule_daily_push(cfg: dict):
         if not scheduler:
             return
 
-        hour = cfg.get("push_hour", 15)
-        minute = cfg.get("push_minute", 30)
         scheduler.reschedule_job(
-            "daily_push",
+            "morning_push",
             trigger=CronTrigger(
-                day_of_week="mon-fri", hour=hour, minute=minute,
+                day_of_week="mon-fri",
+                hour=cfg.get("morning_hour", 9),
+                minute=cfg.get("morning_minute", 0),
+            ),
+        )
+        scheduler.reschedule_job(
+            "afternoon_push",
+            trigger=CronTrigger(
+                day_of_week="mon-fri",
+                hour=cfg.get("afternoon_hour", 15),
+                minute=cfg.get("afternoon_minute", 30),
             ),
         )
     except Exception as e:

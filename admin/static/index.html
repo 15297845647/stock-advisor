@@ -746,62 +746,86 @@
         <div x-show="page==='schedule'" class="fade-in">
           <h2 class="text-xl font-bold mb-6">推送设置</h2>
           <p class="text-xs text-gray-400 mb-4">
-            收盘后自动为每个用户分析自选股并推送结果。推送通过 cc-connect 定向发送到各用户 Bot。
+            两个独立推送任务：晨推（每日推荐股票）和午推（收盘行情分析），均通过 cc-connect 定向发送到各用户 Bot。仅工作日（周一至周五）生效。
           </p>
 
-          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg">
-            <!-- 开关 -->
-            <div class="flex items-center justify-between mb-6">
+          <!-- 晨推配置 -->
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg mb-6">
+            <div class="flex items-center justify-between mb-4">
               <div>
-                <div class="font-medium">启用定时推送</div>
-                <div class="text-xs text-gray-400 mt-0.5">关闭后不会执行收盘推送</div>
+                <div class="font-medium">📈 晨推 · 每日推荐</div>
+                <div class="text-xs text-gray-400 mt-0.5">开盘前为每个用户推荐股票 + 操作建议</div>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" x-model="scheduleCfg.push_enabled" class="sr-only peer">
+                <input type="checkbox" x-model="scheduleCfg.morning_enabled" class="sr-only peer">
                 <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-blue-500/40 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
               </label>
             </div>
-
-            <!-- 推送时间 -->
-            <div class="mb-6">
-              <label class="text-sm text-gray-500 block mb-2">推送时间（交易日）</label>
+            <div class="mb-4">
+              <label class="text-sm text-gray-500 block mb-2">推送时间</label>
               <div class="flex items-center gap-2">
-                <select x-model.number="scheduleCfg.push_hour"
+                <select x-model.number="scheduleCfg.morning_hour"
                         class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-20">
                   <template x-for="h in Array.from({length:24},(_,i)=>i)" :key="h">
                     <option :value="h" x-text="String(h).padStart(2,'0')"></option>
                   </template>
                 </select>
                 <span class="text-gray-400 font-bold">:</span>
-                <select x-model.number="scheduleCfg.push_minute"
+                <select x-model.number="scheduleCfg.morning_minute"
                         class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-20">
                   <template x-for="m in [0,5,10,15,20,25,30,35,40,45,50,55]" :key="m">
                     <option :value="m" x-text="String(m).padStart(2,'0')"></option>
                   </template>
                 </select>
-                <span class="text-xs text-gray-400 ml-2">仅工作日（周一至周五）生效</span>
               </div>
             </div>
-
-            <!-- 保存 -->
-            <div class="flex items-center gap-4">
-              <button @click="saveSchedule()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存设置</button>
-              <span x-show="scheduleSaved" class="text-green-600 text-sm" x-text="scheduleMsg"></span>
-            </div>
+            <button @click="testPush('morning')" :disabled="testPushing"
+                    class="text-sm text-blue-600 hover:text-blue-800 transition disabled:opacity-50">
+              测试晨推
+            </button>
           </div>
 
-          <!-- 手动测试 -->
-          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg mt-6">
-            <h3 class="font-medium mb-3">手动测试</h3>
-            <p class="text-xs text-gray-400 mb-4">立即执行一次推送（不检查是否交易日），用于验证推送通道是否正常。</p>
-            <div class="flex items-center gap-4">
-              <button @click="testPush()" :disabled="testPushing"
-                      class="bg-green-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-green-700 transition disabled:opacity-50">
-                <span x-show="!testPushing">立即推送</span>
-                <span x-show="testPushing">推送中...</span>
-              </button>
-              <span x-show="testPushMsg" class="text-sm" :class="testPushOk?'text-green-600':'text-red-500'" x-text="testPushMsg"></span>
+          <!-- 午推配置 -->
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg mb-6">
+            <div class="flex items-center justify-between mb-4">
+              <div>
+                <div class="font-medium">📊 午推 · 收盘分析</div>
+                <div class="text-xs text-gray-400 mt-0.5">收盘后为每个用户分析自选股 + 操作建议</div>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" x-model="scheduleCfg.afternoon_enabled" class="sr-only peer">
+                <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-blue-500/40 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
             </div>
+            <div class="mb-4">
+              <label class="text-sm text-gray-500 block mb-2">推送时间</label>
+              <div class="flex items-center gap-2">
+                <select x-model.number="scheduleCfg.afternoon_hour"
+                        class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-20">
+                  <template x-for="h in Array.from({length:24},(_,i)=>i)" :key="h">
+                    <option :value="h" x-text="String(h).padStart(2,'0')"></option>
+                  </template>
+                </select>
+                <span class="text-gray-400 font-bold">:</span>
+                <select x-model.number="scheduleCfg.afternoon_minute"
+                        class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-20">
+                  <template x-for="m in [0,5,10,15,20,25,30,35,40,45,50,55]" :key="m">
+                    <option :value="m" x-text="String(m).padStart(2,'0')"></option>
+                  </template>
+                </select>
+              </div>
+            </div>
+            <button @click="testPush('afternoon')" :disabled="testPushing"
+                    class="text-sm text-blue-600 hover:text-blue-800 transition disabled:opacity-50">
+              测试午推
+            </button>
+          </div>
+
+          <!-- 保存 + 测试状态 -->
+          <div class="flex items-center gap-4 mb-6">
+            <button @click="saveSchedule()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存设置</button>
+            <span x-show="scheduleSaved" class="text-green-600 text-sm" x-text="scheduleMsg"></span>
+            <span x-show="testPushMsg" class="text-sm" :class="testPushOk?'text-green-600':'text-red-500'" x-text="testPushMsg"></span>
           </div>
         </div>
 
@@ -973,7 +997,7 @@ function admin() {
     midlongMsg: '',
 
     // schedule
-    scheduleCfg: { push_enabled: true, push_hour: 15, push_minute: 30 },
+    scheduleCfg: { morning_enabled: true, morning_hour: 9, morning_minute: 0, afternoon_enabled: true, afternoon_hour: 15, afternoon_minute: 30 },
     scheduleSaved: false,
     scheduleMsg: '',
     testPushing: false,
@@ -1275,16 +1299,17 @@ function admin() {
       const d = await this.api('/api/schedule-config', { method:'PUT', body:JSON.stringify(this.scheduleCfg) });
       if (d && d.ok) {
         this.scheduleSaved = true;
-        this.scheduleMsg = `已保存，推送时间 ${String(d.config.push_hour).padStart(2,'0')}:${String(d.config.push_minute).padStart(2,'0')}`;
-        this.scheduleCfg = d.config;
+        const c = d.config;
+        this.scheduleMsg = `已保存：晨推 ${String(c.morning_hour).padStart(2,'0')}:${String(c.morning_minute).padStart(2,'0')}，午推 ${String(c.afternoon_hour).padStart(2,'0')}:${String(c.afternoon_minute).padStart(2,'0')}`;
+        this.scheduleCfg = c;
       }
-      setTimeout(() => this.scheduleSaved = false, 3000);
+      setTimeout(() => this.scheduleSaved = false, 4000);
     },
 
-    async testPush() {
+    async testPush(task = 'afternoon') {
       this.testPushing = true; this.testPushMsg = ''; this.testPushOk = false;
       try {
-        const r = await fetch('/api/schedule-config/test-push', { method:'POST', headers:this.headers() });
+        const r = await fetch(`/api/schedule-config/test-push?task=${task}`, { method:'POST', headers:this.headers() });
         const d = await r.json();
         if (r.ok) { this.testPushOk = true; this.testPushMsg = d.message || '已执行'; }
         else { this.testPushOk = false; this.testPushMsg = d.detail || '推送失败'; }

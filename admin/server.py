@@ -34,7 +34,7 @@ async def _daily_log_maintenance():
 
 def _start_scheduler() -> AsyncIOScheduler:
     """启动定时任务调度器（常驻 admin 进程，比 agent 子进程更可靠）"""
-    from scheduler.daily_push import DailyPushScheduler, load_schedule_config
+    from scheduler.daily_push import DailyPushScheduler
     from scheduler.news_sync import run_news_sync
 
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
@@ -47,41 +47,60 @@ def _start_scheduler() -> AsyncIOScheduler:
         name="自选股新闻同步",
     )
 
-    # 收盘后推送（默认 15:30，可通过后台配置修改）
     pusher = DailyPushScheduler()
+
+    # 晨推：每日推荐（默认 09:00）
     scheduler.add_job(
-        pusher.run_daily_analysis,
+        pusher.run_morning_recommend,
+        CronTrigger(day_of_week="mon-fri", hour=9, minute=0),
+        id="morning_push",
+        name="每日推荐推送",
+        replace_existing=True,
+    )
+
+    # 午推：收盘分析（默认 15:30）
+    scheduler.add_job(
+        pusher.run_afternoon_analysis,
         CronTrigger(day_of_week="mon-fri", hour=15, minute=30),
-        id="daily_push",
+        id="afternoon_push",
         name="收盘分析推送",
         replace_existing=True,
     )
 
     scheduler.start()
-    logger.info("定时调度器已启动: 07:30 新闻同步, 15:30 收盘推送")
+    logger.info("定时调度器已启动: 09:00 晨推, 15:30 午推, 07:30 新闻同步")
 
-    # 异步更新推送时间（从 DB 读配置覆盖默认）
     asyncio.ensure_future(_apply_schedule_config(scheduler))
 
     return scheduler
 
 
 async def _apply_schedule_config(scheduler: AsyncIOScheduler):
-    """从 DB 加载推送配置，更新调度时间"""
+    """从 DB 加载推送配置，更新两个推送任务的调度时间"""
     try:
         from scheduler.daily_push import load_schedule_config
         cfg = await load_schedule_config()
-        hour = cfg.get("push_hour", 15)
-        minute = cfg.get("push_minute", 30)
+
+        m_hour = cfg.get("morning_hour", 9)
+        m_min = cfg.get("morning_minute", 0)
         scheduler.reschedule_job(
-            "daily_push",
-            trigger=CronTrigger(
-                day_of_week="mon-fri", hour=hour, minute=minute,
-            ),
+            "morning_push",
+            trigger=CronTrigger(day_of_week="mon-fri", hour=m_hour, minute=m_min),
         )
-        logger.info("推送时间已从配置更新: %02d:%02d", hour, minute)
+
+        a_hour = cfg.get("afternoon_hour", 15)
+        a_min = cfg.get("afternoon_minute", 30)
+        scheduler.reschedule_job(
+            "afternoon_push",
+            trigger=CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=a_min),
+        )
+
+        logger.info(
+            "推送时间已从配置更新: 晨推 %02d:%02d, 午推 %02d:%02d",
+            m_hour, m_min, a_hour, a_min,
+        )
     except Exception as e:
-        logger.warning("加载推送配置失败，使用默认 15:30: %s", e)
+        logger.warning("加载推送配置失败，使用默认时间: %s", e)
 
 
 @asynccontextmanager
