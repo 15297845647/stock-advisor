@@ -55,12 +55,16 @@ class DailyPushScheduler:
         await self._push_recommendations()
         logger.info("[MorningPush] 推荐推送完成")
 
-    async def _push_recommendations(self):
-        """遍历所有用户，为每人生成推荐并推送"""
+    async def _push_recommendations(self) -> int:
+        """遍历所有用户，为每人生成推荐并推送。返回推送用户数。"""
         users = await self._get_all_users()
+        if not users:
+            logger.warning("[MorningPush] users 表为空，无推送目标")
+            return 0
         for wechat_id, profile in users:
             await self._recommend_and_push(wechat_id, profile)
         logger.info("[MorningPush] 推荐完成，共 %d 个用户", len(users))
+        return len(users)
 
     async def _recommend_and_push(self, wechat_id: str, profile: UserProfile):
         """为单个用户生成推荐并推送"""
@@ -115,26 +119,25 @@ class DailyPushScheduler:
         await self._push_market_analysis()
         logger.info("[AfternoonPush] 推送完成")
 
-    async def _push_market_analysis(self):
-        """生成大盘行情分析，推送给所有用户"""
-        try:
-            overview = await self.analysis.get_market_overview()
-        except Exception as e:
-            logger.error("[AfternoonPush] 大盘分析失败: %s", e)
-            return
-
+    async def _push_market_analysis(self) -> int:
+        """生成大盘行情分析，推送给所有用户。返回实际推送用户数。"""
+        overview = await self.analysis.get_market_overview()
         if not overview:
-            logger.warning("[AfternoonPush] 大盘分析无输出，跳过")
-            return
+            raise RuntimeError("大盘分析无输出")
 
         message = f"📊 {date.today()} 收盘行情分析\n\n{overview}"
         message += "\n\n回复股票代码可查看个股详细分析。"
 
         users = await self._get_all_users()
+        if not users:
+            logger.warning("[AfternoonPush] users 表为空，无推送目标")
+            return 0
+
         for wechat_id, _ in users:
             bot_name = f"bot-{wechat_id}"
             _send_via_cc_connect(bot_name, message)
         logger.info("[AfternoonPush] 大盘分析已推送 %d 个用户", len(users))
+        return len(users)
 
 
 def _send_via_cc_connect(project_name: str, text: str):

@@ -440,25 +440,28 @@ class AnalysisService:
         return report_text
 
     async def get_market_overview(self) -> str:
-        """大盘概览 + 市场红绿灯"""
+        """大盘概览 + 红绿灯 + 板块热点 + LLM 操作建议"""
         from domain.market_light import compute_market_light
+        from infrastructure.data_source import get_data_manager
 
+        # 1. 三大指数
         indices = [
             ("000001", "上证指数"),
             ("399001", "深证成指"),
             ("399006", "创业板指"),
         ]
-        lines = ["📊 今日大盘概览\n"]
+        index_lines = []
         sh_change = 0.0
         for code, name in indices:
             q = await self.akshare.get_market_index(code)
             if q:
                 arrow = "🔴" if q.change_pct >= 0 else "🟢"
-                lines.append(f"{arrow} {name}: {q.price:.2f} ({q.change_pct:+.2f}%)")
+                index_lines.append(f"{arrow} {name}: {q.price:.2f} ({q.change_pct:+.2f}%)")
                 if code == "000001":
                     sh_change = q.change_pct
 
-        # 市场红绿灯
+        # 2. 市场红绿灯
+        light_text = ""
         breadth = await self.akshare.get_market_breadth()
         if breadth["rise"] + breadth["fall"] > 0:
             light = compute_market_light(
@@ -466,7 +469,84 @@ class AnalysisService:
                 limit_up=breadth["limit_up"], limit_down=breadth["limit_down"],
                 index_change_pct=sh_change,
             )
-            lines.append(f"\n{light.summary}")
+            light_text = light.summary
 
-        lines.append("\n以上分析仅供参考，不构成投资建议，投资有风险，入市需谨慎。")
-        return "\n".join(lines)
+        # 3. 板块资金流 Top10
+        sector_lines = []
+        try:
+            result = await get_data_manager().fetch_sector_flow(count=10)
+            if result.success and result.data:
+                for i, s in enumerate(result.data[:10], 1):
+                    name = s.get("name", "")
+                    change = s.get("change_pct", 0)
+                    net = s.get("net_amount", 0) / 1e8
+                    arrow = "🔴" if change >= 0 else "🟢"
+                    sector_lines.append(
+                        f"  {i}. {arrow} {name} {change:+.2f}% 净流入{net:+.1f}亿"
+                    )
+        except Exception as e:
+            logger.warning("[MarketOverview] 板块资金流拉取失败: %s", e)
+
+        # 4. 拼装数据上下文，交给 LLM 生成分析 + 操作建议
+        data_context = self._build_market_context(
+            index_lines, light_text, sector_lines, breadth,
+        )
+        analysis = await self._llm_market_analysis(data_context)
+
+        # 5. 组装最终消息
+        parts = ["📊 今日大盘概览\n"]
+        parts.extend(index_lines)
+        if light_text:
+            parts.append(f"\n{light_text}")
+        if sector_lines:
+            parts.append("\n📈 板块资金流 Top10")
+            parts.extend(sector_lines)
+        if analysis:
+            parts.append(f"\n💡 行情分析与操作建议\n\n{analysis}")
+        parts.append("\n以上分析仅供参考，不构成投资建议，投资有风险，入市需谨慎。")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _build_market_context(
+        index_lines: list[str],
+        light_text: str,
+        sector_lines: list[str],
+        breadth: dict,
+    ) -> str:
+        """拼装给 LLM 的市场数据上下文"""
+        parts = ["【三大指数】"]
+        parts.extend(index_lines)
+        if light_text:
+            parts.append(f"\n【市场信号】\n{light_text}")
+        parts.append(
+            f"\n【涨跌统计】涨{breadth.get('rise', 0)}家 "
+            f"跌{breadth.get('fall', 0)}家 "
+            f"涨停{breadth.get('limit_up', 0)} "
+            f"跌停{breadth.get('limit_down', 0)}"
+        )
+        if sector_lines:
+            parts.append("\n【板块资金流】")
+            parts.extend(sector_lines)
+        return "\n".join(parts)
+
+    async def _llm_market_analysis(self, data_context: str) -> str:
+        """让 LLM 基于市场数据生成行情分析 + 操作建议"""
+        prompt = (
+            "你是一位资深 A 股市场分析师。根据以下今日收盘数据，"
+            "写一段简洁的行情分析和明日操作建议。\n\n"
+            "要求：\n"
+            "1. 先总结今日市场特征（一两句话）\n"
+            "2. 分析主要板块动向和资金流向\n"
+            "3. 给出明日操作建议（仓位建议、关注方向、风险提示）\n"
+            "4. 简洁不啰嗦，控制在 300 字以内\n\n"
+            f"{data_context}"
+        )
+        try:
+            return await self.minimax.chat(
+                system_prompt=build_system_prompt(),
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1024,
+            )
+        except Exception as e:
+            logger.warning("[MarketOverview] LLM 分析失败: %s", e)
+            return ""

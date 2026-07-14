@@ -537,11 +537,11 @@ async def test_push(task: str = Query("afternoon", description="morning 或 afte
     pusher = DailyPushScheduler()
     try:
         if task == "morning":
-            await pusher._push_recommendations()
-            return {"ok": True, "message": "晨推测试已执行"}
+            count = await pusher._push_recommendations()
+            return {"ok": True, "message": f"晨推已执行，推送 {count} 个用户"}
         else:
-            await pusher._push_market_analysis()
-            return {"ok": True, "message": "午推测试已执行"}
+            count = await pusher._push_market_analysis()
+            return {"ok": True, "message": f"午推已执行，推送 {count} 个用户"}
     except Exception as e:
         raise HTTPException(500, f"推送失败: {e}")
 
