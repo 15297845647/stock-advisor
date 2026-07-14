@@ -11,6 +11,7 @@ import logging
 import re
 
 from application.analysis_service import AnalysisService
+from application.futures_service import FuturesAnalysisService
 from application.market_data_service import MarketDataService
 from application.recommend_service import RecommendService
 from application.subscription_service import SubscriptionService
@@ -33,6 +34,21 @@ _QUICK_RE = re.compile(r"(?:快速分析|简版分析|快速看)\s*(\d{6})")
 _QUICK_NAME_RE = re.compile(r"(?:快速分析|简版分析|快速看)\s*([^\d\s]{2,6})")
 _BACKTEST_KW = {"回测", "胜率", "历史准确率"}
 
+# 期货品种关键词 → 走 FuturesAnalysisService
+_FUTURES_KW = {"期货", "合约", "主力合约", "连续合约"}
+_FUTURES_NAMES = {
+    "欧线", "集运", "欧线集运", "集运指数",
+    "螺纹", "螺纹钢", "铁矿", "铁矿石",
+    "原油", "黄金", "白银", "铜", "沪铜",
+    "豆粕", "棕榈油", "焦煤", "焦炭",
+    "甲醇", "PTA", "pta", "纯碱", "玻璃",
+    "橡胶", "沥青", "乙二醇", "豆油", "菜油",
+    "苹果", "生猪", "锌", "镍", "锡", "铝",
+    "沪深300", "上证50", "中证500", "中证1000",
+    "国债", "十年国债", "燃油", "低硫燃油",
+    "不锈钢", "花生", "尿素", "棉花", "白糖", "菜粕",
+}
+
 # 推荐意图关键词（无具体代码 + 含这些词 → 走两阶段推荐）
 _RECOMMEND_KW = {
     "推荐", "选股", "推几只", "推一只", "推个", "推一个", "来几只",
@@ -47,6 +63,7 @@ _PICKS_RE = re.compile(r"\[PICKS:([\d,\s]+)\]")
 class ChatService:
     def __init__(self):
         self.analysis = AnalysisService()
+        self.futures = FuturesAnalysisService()
         self.subscription = SubscriptionService()
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
@@ -195,12 +212,23 @@ class ChatService:
                     code, depth=ResearchDepth.QUICK, wechat_id=wechat_id,
                 )
 
+        # 期货分析
+        if self._is_futures_request(msg):
+            return await self.futures.analyze(msg)
+
         # 回测
         if any(kw in msg for kw in _BACKTEST_KW):
             from application.backtest_service import BacktestService
             return await BacktestService().run_backtest(days=30)
 
         return None
+
+    @staticmethod
+    def _is_futures_request(text: str) -> bool:
+        """判断是否为期货分析请求"""
+        has_kw = any(kw in text for kw in _FUTURES_KW)
+        has_name = any(fn in text for fn in _FUTURES_NAMES)
+        return has_kw or has_name
 
     async def _unified_chat(self, wechat_id: str, message: str, ctx: UserContext) -> str:
         """单次 LLM 调用：注入市场上下文 + 用户画像，由 LLM 理解语意并回复"""

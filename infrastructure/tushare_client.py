@@ -33,7 +33,7 @@ _FUTURES_ALIAS: dict[str, tuple[str, str, str]] = {
     "欧线": ("EC", "INE", "欧线集运"),
     "集运": ("EC", "INE", "欧线集运"),
     "欧线集运": ("EC", "INE", "欧线集运"),
-    "天然气": ("LU", "SHFE", "低硫燃油"),
+    "天然气": ("LU", "INE", "低硫燃油"),
     "棕榈": ("P", "DCE", "棕榈油"),
     "棕榈油": ("P", "DCE", "棕榈油"),
     "橡胶": ("RU", "SHFE", "橡胶"),
@@ -50,6 +50,23 @@ _FUTURES_ALIAS: dict[str, tuple[str, str, str]] = {
     "镍": ("NI", "SHFE", "沪镍"),
     "锡": ("SN", "SHFE", "沪锡"),
     "铝": ("AL", "SHFE", "沪铝"),
+    # 股指期货
+    "沪深300": ("IF", "CFFEX", "沪深300股指"),
+    "上证50": ("IH", "CFFEX", "上证50股指"),
+    "中证500": ("IC", "CFFEX", "中证500股指"),
+    "中证1000": ("IM", "CFFEX", "中证1000股指"),
+    # 国债期货
+    "国债": ("T", "CFFEX", "10年期国债"),
+    "十年国债": ("T", "CFFEX", "10年期国债"),
+    # 补充商品期货
+    "燃油": ("FU", "SHFE", "燃油"),
+    "低硫燃油": ("LU", "INE", "低硫燃油"),
+    "不锈钢": ("SS", "SHFE", "不锈钢"),
+    "花生": ("PK", "CZCE", "花生"),
+    "尿素": ("UR", "CZCE", "尿素"),
+    "棉花": ("CF", "CZCE", "棉花"),
+    "白糖": ("SR", "CZCE", "白糖"),
+    "菜粕": ("RM", "CZCE", "菜粕"),
 }
 
 
@@ -72,19 +89,35 @@ class TushareClient:
             pro._DataApi__http_url = http_url
         return pro
 
-    def resolve_futures(self, text: str) -> tuple[str, str, str] | None:
-        """从文本识别期货品种，返回 (品种代码, 交易所, 中文名) 或 None"""
+    def resolve_futures(self, text: str) -> tuple[str, str, str, str | None] | None:
+        """从文本识别期货品种。
+
+        Returns:
+            (品种代码, 交易所, 中文名, 合约月份 or None)
+            合约月份示例: "2408" / "2501" / None(走主力合约)
+        """
+        # 先尝试匹配具体合约代码（如 EC2408, RB2501, rb2410）
+        # 不用 \b — 中文字符在 Python 3 中属于 \w，导致边界失效
+        m = re.search(r"(?<![A-Za-z])([A-Za-z]{1,3})(\d{4})(?!\d)", text)
+        if m:
+            prefix = m.group(1).upper()
+            month = m.group(2)
+            for _, (code, exchange, name) in _FUTURES_ALIAS.items():
+                if code == prefix:
+                    return code, exchange, name, month
+
+        # 中文别名匹配（无具体合约，走主力）
         for alias, info in _FUTURES_ALIAS.items():
             if alias in text:
-                return info
+                return (*info, None)
 
-        # 尝试匹配合约代码格式（如 RB2410, EC0）
-        m = re.search(r"\b([A-Za-z]{1,3})\d{0,4}\b", text)
+        # 品种代码无月份（如 EC, RB, EC0）→ 主力
+        m = re.search(r"(?<![A-Za-z])([A-Za-z]{1,3})\d{0,1}(?!\d)", text)
         if m:
             prefix = m.group(1).upper()
             for _, (code, exchange, name) in _FUTURES_ALIAS.items():
                 if code == prefix:
-                    return code, exchange, name
+                    return code, exchange, name, None
         return None
 
     async def get_main_contract(self, symbol: str, exchange: str) -> str | None:
