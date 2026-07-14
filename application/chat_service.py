@@ -70,7 +70,11 @@ class ChatService:
         await self.user_repo.append_chat(wechat_id, "user", message)
 
         # 快速路由：明确动作关键词直接执行，不走 LLM
-        quick = await self._try_quick_route(wechat_id, message)
+        try:
+            quick = await self._try_quick_route(wechat_id, message)
+        except Exception as e:
+            logger.exception("[QuickRoute] 执行失败")
+            quick = f"处理出错，请稍后重试。（{type(e).__name__}: {e}）"
         if quick is not None:
             await self.user_repo.append_chat(wechat_id, "assistant", quick)
             return quick

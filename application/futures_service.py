@@ -63,12 +63,16 @@ class FuturesAnalysisService:
 
         context = self._build_context(name, contract_code, latest, bars_raw, tech)
 
-        system = _load_template("unified.txt")
-        raw = await self.llm.chat(
-            system_prompt=system,
-            messages=[{"role": "user", "content": context}],
-        )
-        return raw
+        try:
+            system = _load_template("unified.txt")
+            raw = await self.llm.chat(
+                system_prompt=system,
+                messages=[{"role": "user", "content": context}],
+            )
+            return raw or context
+        except Exception as e:
+            logger.error("[FuturesAnalysis] LLM 分析失败: %s，返回原始数据", e)
+            return context
 
     async def _fetch_via_tushare(
         self, symbol: str, exchange: str, name: str,
