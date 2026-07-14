@@ -145,7 +145,6 @@ def build_chat_prompt(ctx: UserContext, user_message: str) -> str:
     style_map = {"day": "短线", "swing": "波段", "position": "中长线"}
 
     memories_text = "\n".join(f"- {m}" for m in ctx.memories) if ctx.memories else "暂无记忆"
-    watchlist_text = ", ".join(ctx.watchlist) if ctx.watchlist else "暂无关注"
 
     chat_lines = []
     for msg in ctx.recent_chat:
@@ -157,7 +156,6 @@ def build_chat_prompt(ctx: UserContext, user_message: str) -> str:
         risk_level=risk_map.get(ctx.profile.risk_level, ctx.profile.risk_level),
         trade_style=style_map.get(ctx.profile.trade_style, ctx.profile.trade_style),
         memories_text=memories_text,
-        watchlist_text=watchlist_text,
         chat_history_text=chat_history_text,
         user_message=user_message,
     )

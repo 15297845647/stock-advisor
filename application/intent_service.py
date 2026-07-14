@@ -24,9 +24,6 @@ _INTENT_SYSTEM_PROMPT = """你是股票助手的意图识别器。把用户消�
 - ANALYZE_STOCK: 分析某只具体股票（普通分析）
 - ANALYZE_STOCK_DEEP: 深度分析/详细分析某只股票
 - ANALYZE_FUTURES: 分析期货品种（螺纹、原油、黄金、欧线等）
-- SUBSCRIBE: 关注/加自选某只股票
-- UNSUBSCRIBE: 取消关注某只股票
-- SHOW_WATCHLIST: 查看关注列表/自选股
 - MARKET_OVERVIEW: 看大盘/市场行情概览
 - SCREEN_STOCKS: 按预设策略条件筛选（金叉选股、超跌反弹、强势突破、均线多头）
 - BACKTEST: 回测/看历史建议准不准/胜率

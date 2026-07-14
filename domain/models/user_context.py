@@ -22,5 +22,4 @@ class UserContext:
     """每次对话时组装的完整用户上下文"""
     profile: UserProfile
     memories: list[str] = field(default_factory=list)
-    watchlist: list[str] = field(default_factory=list)
     recent_chat: list[ChatMessage] = field(default_factory=list)

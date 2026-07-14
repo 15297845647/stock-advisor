@@ -50,7 +50,6 @@ async def dashboard():
     conn = await get_connection()
     try:
         user_count = (await conn.execute_fetchall("SELECT COUNT(*) as c FROM users"))[0]["c"]
-        watch_count = (await conn.execute_fetchall("SELECT COUNT(*) as c FROM user_watchlist"))[0]["c"]
         report_count = (await conn.execute_fetchall("SELECT COUNT(*) as c FROM analysis_reports"))[0]["c"]
         chat_count = (await conn.execute_fetchall("SELECT COUNT(*) as c FROM chat_history"))[0]["c"]
 
@@ -73,7 +72,6 @@ async def dashboard():
 
     return {
         "users": user_count,
-        "watchlist_items": watch_count,
         "total_reports": report_count,
         "total_chats": chat_count,
         "today_reports": today_reports,
@@ -114,13 +112,11 @@ async def list_users():
     try:
         rows = await conn.execute_fetchall(
             "SELECT u.*, "
-            "  COUNT(w.stock_code) as watch_count, "
             "  b.name as bot_name, b.token as bot_token, "
             "  b.account_id as bot_account_id, b.status as bot_status "
             "FROM users u "
-            "LEFT JOIN user_watchlist w ON u.wechat_id = w.wechat_id "
             "LEFT JOIN bots b ON u.wechat_id = b.user_id "
-            "GROUP BY u.wechat_id ORDER BY u.created_at DESC"
+            "ORDER BY u.created_at DESC"
         )
         return [dict(r) for r in rows]
     finally:
@@ -169,9 +165,6 @@ async def get_user_detail(wechat_id: str):
 
         bot_rows = await conn.execute_fetchall("SELECT * FROM bots WHERE user_id = ?", (wechat_id,))
 
-        watchlist = await conn.execute_fetchall(
-            "SELECT stock_code, stock_name, added_at FROM user_watchlist WHERE wechat_id = ?", (wechat_id,)
-        )
         memories = await conn.execute_fetchall(
             "SELECT content, category, created_at FROM user_memory WHERE wechat_id = ? ORDER BY created_at DESC LIMIT 30",
             (wechat_id,),
@@ -183,7 +176,6 @@ async def get_user_detail(wechat_id: str):
         return {
             "profile": dict(user_rows[0]),
             "bot": dict(bot_rows[0]) if bot_rows else None,
-            "watchlist": [dict(r) for r in watchlist],
             "memories": [dict(r) for r in memories],
             "recent_chat": [dict(r) for r in reversed(list(recent_chat))],
         }
@@ -286,7 +278,6 @@ async def delete_user(wechat_id: str):
     try:
         await conn.execute("DELETE FROM bots WHERE user_id = ?", (wechat_id,))
         await conn.execute("DELETE FROM user_positions WHERE wechat_id = ?", (wechat_id,))
-        await conn.execute("DELETE FROM user_watchlist WHERE wechat_id = ?", (wechat_id,))
         await conn.execute("DELETE FROM user_memory WHERE wechat_id = ?", (wechat_id,))
         await conn.execute("DELETE FROM chat_history WHERE wechat_id = ?", (wechat_id,))
         await conn.execute("DELETE FROM users WHERE wechat_id = ?", (wechat_id,))
@@ -444,7 +435,6 @@ class UpdateStrategyConfigRequest(BaseModel):
     volume_ratio_min: float | None = None
     candidate_cap: int | None = None
     output_count: int | None = None
-    auto_watchlist: bool | None = None
     advice_rule3: str | None = None
     advice_rule4: str | None = None
     advice_rule5: str | None = None
@@ -477,7 +467,6 @@ class UpdateMidLongConfigRequest(BaseModel):
     min_revenue_growth: float | None = None
     candidate_cap: int | None = None
     output_count: int | None = None
-    auto_watchlist: bool | None = None
     advice_hold: str | None = None
     advice_stop: str | None = None
     advice_add: str | None = None
@@ -551,7 +540,7 @@ async def test_push(task: str = Query("afternoon", description="morning 或 afte
             await pusher._push_recommendations()
             return {"ok": True, "message": "晨推测试已执行"}
         else:
-            await pusher._push_watchlist_analysis()
+            await pusher._push_market_analysis()
             return {"ok": True, "message": "午推测试已执行"}
     except Exception as e:
         raise HTTPException(500, f"推送失败: {e}")

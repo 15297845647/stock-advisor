@@ -24,14 +24,6 @@ CREATE TABLE IF NOT EXISTS user_memory (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS user_watchlist (
-    wechat_id TEXT REFERENCES users(wechat_id),
-    stock_code TEXT NOT NULL,
-    stock_name TEXT,
-    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (wechat_id, stock_code)
-);
-
 CREATE TABLE IF NOT EXISTS chat_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     wechat_id TEXT REFERENCES users(wechat_id),

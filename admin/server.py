@@ -35,17 +35,8 @@ async def _daily_log_maintenance():
 def _start_scheduler() -> AsyncIOScheduler:
     """启动定时任务调度器（常驻 admin 进程，比 agent 子进程更可靠）"""
     from scheduler.daily_push import DailyPushScheduler
-    from scheduler.news_sync import run_news_sync
 
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
-
-    # 每交易日 07:30 拉自选股新闻
-    scheduler.add_job(
-        run_news_sync,
-        CronTrigger(hour=7, minute=30, day_of_week="mon-fri"),
-        id="news_sync",
-        name="自选股新闻同步",
-    )
 
     pusher = DailyPushScheduler()
 
@@ -68,7 +59,7 @@ def _start_scheduler() -> AsyncIOScheduler:
     )
 
     scheduler.start()
-    logger.info("定时调度器已启动: 09:00 晨推, 15:30 午推, 07:30 新闻同步")
+    logger.info("定时调度器已启动: 09:00 晨推, 15:30 午推")
 
     asyncio.ensure_future(_apply_schedule_config(scheduler))
 

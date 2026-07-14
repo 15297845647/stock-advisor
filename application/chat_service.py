@@ -1,7 +1,7 @@
 """对话编排 — 统一 LLM 对话（去掉意图分类层）
 
 流程：
-1. 快速关键词检测明确动作（关注/取消/自选/大盘）→ 直接执行
+1. 快速关键词检测明确动作（大盘/分析/期货）→ 直接执行
 2. 推荐类请求走两阶段：LLM选股 → 拉实时数据 → LLM分析验证
 3. 其余走单次 LLM 对话（注入市场数据 + 用户画像）
 4. 解析 LLM 输出中的动作标记并执行副作用
@@ -14,7 +14,6 @@ from application.analysis_service import AnalysisService
 from application.futures_service import FuturesAnalysisService
 from application.market_data_service import MarketDataService
 from application.recommend_service import RecommendService
-from application.subscription_service import SubscriptionService
 from domain.action_parser import extract_actions
 from domain.models.user_context import UserContext
 from domain.prompt_builder import _load_template
@@ -24,9 +23,6 @@ from repository.user_repository import UserRepository
 logger = logging.getLogger(__name__)
 
 # 关键词快速路由（不需要 LLM，秒响应）
-_SUBSCRIBE_RE = re.compile(r"(?:关注|加自选|加入自选|订阅)\s*(\d{6})")
-_UNSUBSCRIBE_RE = re.compile(r"(?:取消关注|删除自选|移除自选|退订)\s*(\d{6})")
-_WATCHLIST_KW = {"自选股", "关注列表", "我的自选", "看看自选", "自选"}
 _MARKET_KW = {"大盘", "市场概览", "三大指数", "大盘怎么样", "今天行情"}
 _DEEP_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*(\d{6})")
 _DEEP_NAME_RE = re.compile(r"(?:深度分析|详细分析|深入分析)\s*([^\d\s]{2,6})")
@@ -64,7 +60,6 @@ class ChatService:
     def __init__(self):
         self.analysis = AnalysisService()
         self.futures = FuturesAnalysisService()
-        self.subscription = SubscriptionService()
         self.minimax = MiniMaxClient()
         self.user_repo = UserRepository()
         self.market_data = MarketDataService()
@@ -154,20 +149,6 @@ class ChatService:
     async def _try_quick_route(self, wechat_id: str, message: str) -> str | None:
         """关键词快速路由，匹配则直接返回结果，不匹配返回 None"""
         msg = message.strip()
-
-        # 关注
-        m = _SUBSCRIBE_RE.search(msg)
-        if m:
-            return await self.subscription.subscribe(wechat_id, m.group(1))
-
-        # 取消关注
-        m = _UNSUBSCRIBE_RE.search(msg)
-        if m:
-            return await self.subscription.unsubscribe(wechat_id, m.group(1))
-
-        # 自选列表
-        if any(kw in msg for kw in _WATCHLIST_KW):
-            return await self.subscription.show_watchlist(wechat_id)
 
         # 大盘概览
         if any(kw in msg for kw in _MARKET_KW):
@@ -260,16 +241,6 @@ class ChatService:
         for act in actions:
             try:
                 match act.action:
-                    case "SUBSCRIBE":
-                        if act.code:
-                            await self.subscription.subscribe(
-                                wechat_id, act.code
-                            )
-                            logger.info("LLM触发加自选: %s %s", act.code, act.name)
-                    case "UNSUBSCRIBE":
-                        if act.code:
-                            await self.subscription.unsubscribe(wechat_id, act.code)
-                            logger.info("LLM触发取消自选: %s", act.code)
                     case "DEEP_ANALYZE":
                         pass  # 深度分析需要时间，不在当前回复中执行
             except Exception as e:

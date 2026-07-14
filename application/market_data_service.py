@@ -204,9 +204,6 @@ class MarketDataService:
             f"- 交易风格：{style}",
         ]
 
-        if ctx.watchlist:
-            lines.append(f"- 自选股：{', '.join(ctx.watchlist)}")
-
         if ctx.memories:
             lines.append("- 记忆：" + "；".join(ctx.memories[:5]))
 

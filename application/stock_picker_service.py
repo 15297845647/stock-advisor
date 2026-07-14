@@ -17,8 +17,6 @@ from domain.strategy.strategy_config import MidLongConfig, YangjiaConfig
 from domain.stock_analyzer import TechnicalSnapshot, analyze_technical
 from infrastructure.akshare_client import AKShareClient
 from infrastructure.minimax_client import MiniMaxClient
-from repository.user_repository import UserRepository
-
 logger = logging.getLogger(__name__)
 
 # 拉K线天数：覆盖回溯窗口同时满足技术指标计算（analyze_technical 需 >=10 根）
@@ -45,7 +43,6 @@ class StockPickerService:
         self.akshare = AKShareClient()
         self.analysis = AnalysisService()
         self.config_service = ConfigService()
-        self.user_repo = UserRepository()
         self.minimax = MiniMaxClient()
 
     async def pick(self, ctx: UserContext, wechat_id: str, count: int | None = None) -> str:
@@ -88,9 +85,6 @@ class StockPickerService:
 
         picks = self._select_new_picks(wechat_id, winners, count or cfg.output_count)
 
-        if cfg.auto_watchlist:
-            await self._add_to_watchlist(wechat_id, picks)
-
         # 阶段C：快速汇总（1次LLM，不跑完整agent管线）
         verdicts = await self._quick_verdicts(picks, "养家短线")
 
@@ -120,14 +114,6 @@ class StockPickerService:
                     "signal": self._tech_signal(tech),
                 })
         return winners
-
-    async def _add_to_watchlist(self, wechat_id: str, picks: list[dict]) -> None:
-        """规则1：入选标的加入自选"""
-        for p in picks:
-            try:
-                await self.user_repo.subscribe(wechat_id, p["code"], p["name"])
-            except Exception as e:
-                logger.warning("加自选 %s 失败: %s", p["code"], e)
 
     async def _quick_verdicts(self, picks: list[dict], strategy_label: str) -> str:
         """一次 LLM 汇总，为入选股各出一句话操作建议（不跑 agent 管线）"""
@@ -226,9 +212,6 @@ class StockPickerService:
             return self._no_match_message_midlong(cfg)
 
         picks = self._select_new_picks(wechat_id, winners, count or cfg.output_count)
-
-        if cfg.auto_watchlist:
-            await self._add_to_watchlist(wechat_id, picks)
 
         verdicts = await self._quick_verdicts(picks, "中长线趋势+基本面")
         return self._assemble_midlong(picks, verdicts, cfg)

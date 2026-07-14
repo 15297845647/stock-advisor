@@ -147,7 +147,6 @@
                     <th class="px-4 py-3 font-medium">风险偏好</th>
                     <th class="px-4 py-3 font-medium">交易风格</th>
                     <th class="px-4 py-3 font-medium">Bot 状态</th>
-                    <th class="px-4 py-3 font-medium">关注数</th>
                     <th class="px-4 py-3 font-medium">注册时间</th>
                     <th class="px-4 py-3 font-medium">操作</th>
                   </tr>
@@ -164,7 +163,6 @@
                               class="px-2 py-0.5 rounded-full text-xs font-medium"
                               x-text="u.bot_status==='active'?'已绑定': u.bot_status==='pending'?'待绑定':'未配置'"></span>
                       </td>
-                      <td class="px-4 py-3" x-text="u.watch_count"></td>
                       <td class="px-4 py-3 text-gray-400 text-xs" x-text="u.created_at?.slice(0,10)"></td>
                       <td class="px-4 py-3 space-x-2">
                         <button @click="viewUser(u.wechat_id)" class="text-blue-600 hover:underline text-xs">详情</button>
@@ -288,19 +286,6 @@
                 </template>
               </div>
 
-              <!-- 关注列表 -->
-              <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
-                <h3 class="font-medium mb-4">关注列表</h3>
-                <div class="space-y-1.5 text-sm max-h-60 overflow-auto">
-                  <template x-for="w in selectedUser.watchlist||[]" :key="w.stock_code">
-                    <div class="flex justify-between items-center py-1">
-                      <span><span class="font-mono text-xs text-gray-500" x-text="w.stock_code"></span> <span x-text="w.stock_name||''"></span></span>
-                      <span class="text-gray-400 text-xs" x-text="w.added_at?.slice(0,10)"></span>
-                    </div>
-                  </template>
-                  <div x-show="!selectedUser.watchlist?.length" class="text-gray-400">暂无关注</div>
-                </div>
-              </div>
               <!-- 记忆 -->
               <div class="bg-white rounded-xl shadow-sm p-5 border border-gray-100">
                 <h3 class="font-medium mb-4">长期记忆</h3>
@@ -647,10 +632,6 @@
                 <input type="number" x-model.number="strategyCfg.output_count"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
               </div>
-              <div class="flex items-center gap-2 pt-6">
-                <input type="checkbox" id="autoWatch" x-model="strategyCfg.auto_watchlist" class="w-4 h-4">
-                <label for="autoWatch" class="text-sm text-gray-500">入选自动加自选</label>
-              </div>
             </div>
             <hr class="border-gray-100 my-4">
             <div class="space-y-3">
@@ -711,10 +692,6 @@
                 <label class="text-sm text-gray-500 block mb-1">输出条数</label>
                 <input type="number" x-model.number="midlongCfg.output_count"
                        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40">
-              </div>
-              <div class="flex items-center gap-2 pt-6">
-                <input type="checkbox" id="mlAutoWatch" x-model="midlongCfg.auto_watchlist" class="w-4 h-4">
-                <label for="mlAutoWatch" class="text-sm text-gray-500">入选自动加自选</label>
               </div>
             </div>
             <hr class="border-gray-100 my-4">
@@ -790,7 +767,7 @@
             <div class="flex items-center justify-between mb-4">
               <div>
                 <div class="font-medium">📊 午推 · 收盘分析</div>
-                <div class="text-xs text-gray-400 mt-0.5">收盘后为每个用户分析自选股 + 操作建议</div>
+                <div class="text-xs text-gray-400 mt-0.5">收盘后推送大盘行情分析 + 操作建议</div>
               </div>
               <label class="relative inline-flex items-center cursor-pointer">
                 <input type="checkbox" x-model="scheduleCfg.afternoon_enabled" class="sr-only peer">
@@ -1071,7 +1048,6 @@ function admin() {
       this.dash = d;
       this.stats = [
         { label: '用户数', value: d.users },
-        { label: '关注股票数', value: d.watchlist_items },
         { label: '今日报告', value: d.today_reports || 0 },
         { label: '今日对话', value: d.today_chats },
       ];
@@ -1097,7 +1073,7 @@ function admin() {
     },
 
     async deleteUser(id, name) {
-      if (!confirm(`确定删除用户 "${name}"？将同时删除其 Bot 配置、关注列表、记忆和对话记录。`)) return;
+      if (!confirm(`确定删除用户 "${name}"？将同时删除其 Bot 配置、记忆和对话记录。`)) return;
       await this.api('/api/users/' + id, { method:'DELETE' });
       await this.loadUsers();
     },

@@ -25,7 +25,6 @@ class YangjiaConfig:
     volume_ratio_min: float = 1.5  # 量比阈值（活跃度）
     candidate_cap: int = 40        # 阶段B候选池上限
     output_count: int = 5          # 最终输出条数
-    auto_watchlist: bool = False   # 是否自动写入自选
     advice_rule3: str = DEFAULT_ADVICE_RULE3
     advice_rule4: str = DEFAULT_ADVICE_RULE4
     advice_rule5: str = DEFAULT_ADVICE_RULE5
@@ -65,7 +64,6 @@ class MidLongConfig:
     min_revenue_growth: float = 0.0  # 营收同比增长下限(%)
     candidate_cap: int = 40
     output_count: int = 5
-    auto_watchlist: bool = False
     advice_hold: str = DEFAULT_ML_ADVICE_HOLD
     advice_stop: str = DEFAULT_ML_ADVICE_STOP
     advice_add: str = DEFAULT_ML_ADVICE_ADD

@@ -1,7 +1,7 @@
 """每日定时推送 — 双推送任务
 
 晨推（默认 09:00）：为每个用户推荐股票 + 操作建议
-午推（默认 15:30）：为每个用户的自选股做行情分析 + 操作建议
+午推（默认 15:30）：为每个用户推送收盘行情分析 + 操作建议
 
 嵌入 admin 常驻进程，通过 APScheduler 触发。
 推送时间从 DB 配置读取，后台可修改。
@@ -17,7 +17,6 @@ from application.recommend_service import RecommendService
 from domain.models.user_context import UserContext, UserProfile
 from infrastructure.akshare_client import AKShareClient
 from infrastructure.database import get_connection
-from repository.user_repository import UserRepository
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,6 @@ class DailyPushScheduler:
     def __init__(self):
         self.analysis = AnalysisService()
         self.recommend = RecommendService()
-        self.user_repo = UserRepository()
         self.akshare = AKShareClient()
 
     # ────────────── 晨推：每日推荐股票 ──────────────
@@ -100,10 +98,10 @@ class DailyPushScheduler:
         finally:
             await conn.close()
 
-    # ────────────── 午推：收盘行情分析 ──────────────
+    # ────────────── 午推：大盘行情分析 ──────────────
 
     async def run_afternoon_analysis(self):
-        """交易日收盘后：给每个有自选股的用户推送行情分析"""
+        """交易日收盘后：推送大盘行情分析 + 操作建议"""
         cfg = await load_schedule_config()
         if not cfg.get("afternoon_enabled", True):
             logger.info("[AfternoonPush] 午推已关闭，跳过")
@@ -113,37 +111,30 @@ class DailyPushScheduler:
             logger.info("[AfternoonPush] 非交易日，跳过")
             return
 
-        logger.info("[AfternoonPush] 开始收盘分析推送...")
-        await self._push_watchlist_analysis()
+        logger.info("[AfternoonPush] 开始大盘分析推送...")
+        await self._push_market_analysis()
         logger.info("[AfternoonPush] 推送完成")
 
-    async def _push_watchlist_analysis(self):
-        """遍历所有有自选股的用户，逐个分析推送"""
-        users = await self.user_repo.get_all_users_with_watchlist()
-        for wechat_id, stock_codes in users:
-            await self._analyze_and_push(wechat_id, stock_codes)
-        logger.info("[AfternoonPush] 自选分析完成，共 %d 个用户", len(users))
-
-    async def _analyze_and_push(self, wechat_id: str, stock_codes: list[str]):
-        """分析用户自选股并推送结果"""
-        summaries = []
-        for code in stock_codes:
-            try:
-                report = await self.analysis.analyze_stock(code, force=True)
-                summary = report[:200] + "..." if len(report) > 200 else report
-                summaries.append(f"【{code}】\n{summary}")
-            except Exception as e:
-                logger.error("[AfternoonPush] 分析 %s 失败: %s", code, e)
-                summaries.append(f"【{code}】分析失败")
-
-        if not summaries:
+    async def _push_market_analysis(self):
+        """生成大盘行情分析，推送给所有用户"""
+        try:
+            overview = await self.analysis.get_market_overview()
+        except Exception as e:
+            logger.error("[AfternoonPush] 大盘分析失败: %s", e)
             return
 
-        message = f"📊 {date.today()} 收盘分析\n\n" + "\n\n".join(summaries)
-        message += "\n\n回复股票代码可查看详细分析。"
+        if not overview:
+            logger.warning("[AfternoonPush] 大盘分析无输出，跳过")
+            return
 
-        bot_name = f"bot-{wechat_id}"
-        _send_via_cc_connect(bot_name, message)
+        message = f"📊 {date.today()} 收盘行情分析\n\n{overview}"
+        message += "\n\n回复股票代码可查看个股详细分析。"
+
+        users = await self._get_all_users()
+        for wechat_id, _ in users:
+            bot_name = f"bot-{wechat_id}"
+            _send_via_cc_connect(bot_name, message)
+        logger.info("[AfternoonPush] 大盘分析已推送 %d 个用户", len(users))
 
 
 def _send_via_cc_connect(project_name: str, text: str):

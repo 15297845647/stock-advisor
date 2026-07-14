@@ -9,9 +9,6 @@ class Intent(Enum):
     ANALYZE_STOCK = auto()    # 分析某只股票
     ANALYZE_STOCK_DEEP = auto() # 深度分析（多空辩论）
     ANALYZE_FUTURES = auto()  # 分析期货品种
-    SUBSCRIBE = auto()        # 关注/订阅
-    UNSUBSCRIBE = auto()      # 取消关注
-    SHOW_WATCHLIST = auto()   # 查看关注列表
     MARKET_OVERVIEW = auto()  # 大盘概览
     RECOMMEND = auto()        # 推荐/选股
     SCREEN_STOCKS = auto()    # 条件筛选
@@ -49,9 +46,6 @@ _STOCK_ALIAS: dict[str, str] = {
 }
 
 # 意图关键词映射
-_SUBSCRIBE_KW = {"关注", "订阅", "加入", "添加", "跟踪", "加自选"}
-_UNSUBSCRIBE_KW = {"取消关注", "取关", "删除", "移除", "不看了"}
-_WATCHLIST_KW = {"关注列表", "自选股", "我的关注", "我关注了什么", "看看列表"}
 _MARKET_KW = {"大盘", "上证", "沪深", "市场", "指数", "今天行情"}
 _RECOMMEND_KW = {"推荐", "选股", "买什么", "热点股", "龙头", "强势股", "牛股", "推荐几只", "有什么好股"}
 _SCREEN_KW = {"筛选", "选出", "筛股", "金叉选股", "超跌反弹", "强势突破", "均线多头", "条件选股"}
@@ -76,20 +70,6 @@ _FUTURES_NAMES = {
 def parse_intent(text: str) -> ParsedIntent:
     """解析用户消息意图"""
     text_lower = text.strip()
-
-    # 取消关注（优先匹配，因为包含"关注"）
-    if any(kw in text_lower for kw in _UNSUBSCRIBE_KW):
-        code = _extract_code(text_lower)
-        return ParsedIntent(Intent.UNSUBSCRIBE, stock_code=code, raw_text=text)
-
-    # 关注
-    if any(kw in text_lower for kw in _SUBSCRIBE_KW):
-        code = _extract_code(text_lower)
-        return ParsedIntent(Intent.SUBSCRIBE, stock_code=code, raw_text=text)
-
-    # 查看关注列表
-    if any(kw in text_lower for kw in _WATCHLIST_KW):
-        return ParsedIntent(Intent.SHOW_WATCHLIST, raw_text=text)
 
     # 大盘概览
     if any(kw in text_lower for kw in _MARKET_KW):

@@ -1,8 +1,6 @@
 """动作解析器 — 从 LLM 输出中提取结构化动作标记
 
 支持的标记格式：
-- [ACTION:SUBSCRIBE:代码:名称]
-- [ACTION:UNSUBSCRIBE:代码]
 - [ACTION:DEEP_ANALYZE:代码]
 """
 
@@ -14,7 +12,7 @@ _ACTION_RE = re.compile(r"\[ACTION:(\w+)(?::([^\]:]*))?(?::([^\]]*))?\]")
 
 @dataclass
 class ParsedAction:
-    action: str       # SUBSCRIBE / UNSUBSCRIBE / DEEP_ANALYZE
+    action: str       # DEEP_ANALYZE
     code: str | None
     name: str | None
 

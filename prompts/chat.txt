@@ -5,9 +5,6 @@
 【用户长期记忆】
 {memories_text}
 
-【关注列表】
-{watchlist_text}
-
 【近期对话】
 {chat_history_text}
 
