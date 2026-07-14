@@ -128,10 +128,12 @@ class FuturesAnalysisService:
     def _to_daily_bars(bars_raw: list[dict]) -> list[StockDailyBar]:
         return [
             StockDailyBar(
+                code=b.get("code", ""),
                 trade_date=b["date"],
                 open=b["open"], high=b["high"],
                 low=b["low"], close=b["close"],
                 volume=b["volume"],
+                amount=b.get("amount", 0),
                 change_pct=b["change_pct"],
             )
             for b in bars_raw
