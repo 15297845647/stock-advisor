@@ -33,7 +33,8 @@ async def _daily_log_maintenance():
 
 
 def _start_scheduler() -> AsyncIOScheduler:
-    """启动定时任务调度器"""
+    """启动定时任务调度器（常驻 admin 进程，比 agent 子进程更可靠）"""
+    from scheduler.daily_push import DailyPushScheduler, load_schedule_config
     from scheduler.news_sync import run_news_sync
 
     scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
@@ -46,9 +47,41 @@ def _start_scheduler() -> AsyncIOScheduler:
         name="自选股新闻同步",
     )
 
+    # 收盘后推送（默认 15:30，可通过后台配置修改）
+    pusher = DailyPushScheduler()
+    scheduler.add_job(
+        pusher.run_daily_analysis,
+        CronTrigger(day_of_week="mon-fri", hour=15, minute=30),
+        id="daily_push",
+        name="收盘分析推送",
+        replace_existing=True,
+    )
+
     scheduler.start()
-    logger.info("定时调度器已启动: 07:30 自选股新闻同步")
+    logger.info("定时调度器已启动: 07:30 新闻同步, 15:30 收盘推送")
+
+    # 异步更新推送时间（从 DB 读配置覆盖默认）
+    asyncio.ensure_future(_apply_schedule_config(scheduler))
+
     return scheduler
+
+
+async def _apply_schedule_config(scheduler: AsyncIOScheduler):
+    """从 DB 加载推送配置，更新调度时间"""
+    try:
+        from scheduler.daily_push import load_schedule_config
+        cfg = await load_schedule_config()
+        hour = cfg.get("push_hour", 15)
+        minute = cfg.get("push_minute", 30)
+        scheduler.reschedule_job(
+            "daily_push",
+            trigger=CronTrigger(
+                day_of_week="mon-fri", hour=hour, minute=minute,
+            ),
+        )
+        logger.info("推送时间已从配置更新: %02d:%02d", hour, minute)
+    except Exception as e:
+        logger.warning("加载推送配置失败，使用默认 15:30: %s", e)
 
 
 @asynccontextmanager
@@ -56,6 +89,7 @@ async def lifespan(application: FastAPI):
     await init_db()
     task = asyncio.create_task(_daily_log_maintenance())
     scheduler = _start_scheduler()
+    application.state.scheduler = scheduler
     try:
         yield
     finally:

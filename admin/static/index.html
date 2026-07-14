@@ -742,6 +742,69 @@
           </div>
         </div>
 
+        <!-- 推送设置 -->
+        <div x-show="page==='schedule'" class="fade-in">
+          <h2 class="text-xl font-bold mb-6">推送设置</h2>
+          <p class="text-xs text-gray-400 mb-4">
+            收盘后自动为每个用户分析自选股并推送结果。推送通过 cc-connect 定向发送到各用户 Bot。
+          </p>
+
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg">
+            <!-- 开关 -->
+            <div class="flex items-center justify-between mb-6">
+              <div>
+                <div class="font-medium">启用定时推送</div>
+                <div class="text-xs text-gray-400 mt-0.5">关闭后不会执行收盘推送</div>
+              </div>
+              <label class="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" x-model="scheduleCfg.push_enabled" class="sr-only peer">
+                <div class="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-blue-500/40 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+              </label>
+            </div>
+
+            <!-- 推送时间 -->
+            <div class="mb-6">
+              <label class="text-sm text-gray-500 block mb-2">推送时间（交易日）</label>
+              <div class="flex items-center gap-2">
+                <select x-model.number="scheduleCfg.push_hour"
+                        class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-20">
+                  <template x-for="h in Array.from({length:24},(_,i)=>i)" :key="h">
+                    <option :value="h" x-text="String(h).padStart(2,'0')"></option>
+                  </template>
+                </select>
+                <span class="text-gray-400 font-bold">:</span>
+                <select x-model.number="scheduleCfg.push_minute"
+                        class="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 w-20">
+                  <template x-for="m in [0,5,10,15,20,25,30,35,40,45,50,55]" :key="m">
+                    <option :value="m" x-text="String(m).padStart(2,'0')"></option>
+                  </template>
+                </select>
+                <span class="text-xs text-gray-400 ml-2">仅工作日（周一至周五）生效</span>
+              </div>
+            </div>
+
+            <!-- 保存 -->
+            <div class="flex items-center gap-4">
+              <button @click="saveSchedule()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">保存设置</button>
+              <span x-show="scheduleSaved" class="text-green-600 text-sm" x-text="scheduleMsg"></span>
+            </div>
+          </div>
+
+          <!-- 手动测试 -->
+          <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100 max-w-lg mt-6">
+            <h3 class="font-medium mb-3">手动测试</h3>
+            <p class="text-xs text-gray-400 mb-4">立即执行一次推送（不检查是否交易日），用于验证推送通道是否正常。</p>
+            <div class="flex items-center gap-4">
+              <button @click="testPush()" :disabled="testPushing"
+                      class="bg-green-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-green-700 transition disabled:opacity-50">
+                <span x-show="!testPushing">立即推送</span>
+                <span x-show="testPushing">推送中...</span>
+              </button>
+              <span x-show="testPushMsg" class="text-sm" :class="testPushOk?'text-green-600':'text-red-500'" x-text="testPushMsg"></span>
+            </div>
+          </div>
+        </div>
+
         <div x-show="page==='config'" class="fade-in">
           <h2 class="text-xl font-bold mb-6">配置管理</h2>
           <p class="text-xs text-gray-400 mb-4">
@@ -909,6 +972,14 @@ function admin() {
     midlongSaved: false,
     midlongMsg: '',
 
+    // schedule
+    scheduleCfg: { push_enabled: true, push_hour: 15, push_minute: 30 },
+    scheduleSaved: false,
+    scheduleMsg: '',
+    testPushing: false,
+    testPushMsg: '',
+    testPushOk: false,
+
     // data sources
     ds: {
       summary: null,
@@ -930,6 +1001,7 @@ function admin() {
       { key: 'dashboard', label: '仪表盘' },
       { key: 'users', label: '用户管理' },
       { key: 'strategy', label: '策略配置' },
+      { key: 'schedule', label: '推送设置' },
       { key: 'data-sources', label: '数据源' },
       { key: 'logs', label: '日志查看' },
       { key: 'config', label: '配置管理' },
@@ -939,9 +1011,10 @@ function admin() {
       this.menu[0].load = () => this.loadDashboard();
       this.menu[1].load = () => this.loadUsers();
       this.menu[2].load = () => { this.loadStrategy(); this.loadMidlong(); };
-      this.menu[3].load = () => this.loadDataSources();
-      this.menu[4].load = () => this.loadLogFiles();
-      this.menu[5].load = () => this.loadConfig();
+      this.menu[3].load = () => this.loadSchedule();
+      this.menu[4].load = () => this.loadDataSources();
+      this.menu[5].load = () => this.loadLogFiles();
+      this.menu[6].load = () => this.loadConfig();
       if (this.token) await this.loadDashboard();
     },
 
@@ -1190,6 +1263,34 @@ function admin() {
       const d = await this.api('/api/strategy-config', { method:'PUT', body:JSON.stringify(this.strategyCfg) });
       if (d && d.ok) { this.strategySaved = true; this.strategyMsg = '已保存，实时生效'; this.strategyCfg = d.config; }
       setTimeout(() => this.strategySaved = false, 3000);
+    },
+
+    // ── Schedule Config ──
+    async loadSchedule() {
+      const d = await this.api('/api/schedule-config');
+      if (d) this.scheduleCfg = d;
+    },
+
+    async saveSchedule() {
+      const d = await this.api('/api/schedule-config', { method:'PUT', body:JSON.stringify(this.scheduleCfg) });
+      if (d && d.ok) {
+        this.scheduleSaved = true;
+        this.scheduleMsg = `已保存，推送时间 ${String(d.config.push_hour).padStart(2,'0')}:${String(d.config.push_minute).padStart(2,'0')}`;
+        this.scheduleCfg = d.config;
+      }
+      setTimeout(() => this.scheduleSaved = false, 3000);
+    },
+
+    async testPush() {
+      this.testPushing = true; this.testPushMsg = ''; this.testPushOk = false;
+      try {
+        const r = await fetch('/api/schedule-config/test-push', { method:'POST', headers:this.headers() });
+        const d = await r.json();
+        if (r.ok) { this.testPushOk = true; this.testPushMsg = d.message || '已执行'; }
+        else { this.testPushOk = false; this.testPushMsg = d.detail || '推送失败'; }
+      } catch(e) { this.testPushOk = false; this.testPushMsg = '请求失败'; }
+      finally { this.testPushing = false; }
+      setTimeout(() => this.testPushMsg = '', 5000);
     },
 
     // ── MidLong Strategy Config ──

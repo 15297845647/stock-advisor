@@ -13,7 +13,7 @@ from agent.user_router import UserRouter  # noqa: E402
 from application.chat_service import ChatService  # noqa: E402
 from infrastructure.database import init_db  # noqa: E402
 from infrastructure.log_setup import cleanup_old_logs, make_daily_handler  # noqa: E402
-from scheduler.daily_push import setup_scheduler  # noqa: E402
+# 定时任务已迁移到 admin/server.py 常驻调度器
 
 logging.basicConfig(
     level=logging.INFO,
@@ -118,7 +118,6 @@ class StockAdvisorAgent:
 
     async def _handle_initialize(self, params: dict) -> dict:
         await self._ensure_db()
-        setup_scheduler()
         logger.info("StockAdvisorAgent initialized")
         return {
             "protocolVersion": 1,

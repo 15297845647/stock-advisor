@@ -502,6 +502,78 @@ async def update_midlong_config(req: UpdateMidLongConfigRequest):
     return {"ok": True, "config": cfg.to_dict()}
 
 
+# ────────────────────── 推送配置 ──────────────────────
+
+
+class UpdateScheduleRequest(BaseModel):
+    push_enabled: bool | None = None
+    push_hour: int | None = None
+    push_minute: int | None = None
+
+
+@router.get("/schedule-config", dependencies=[Depends(verify_token)])
+async def get_schedule_config():
+    """读取定时推送配置"""
+    from scheduler.daily_push import load_schedule_config
+    return await load_schedule_config()
+
+
+@router.put("/schedule-config", dependencies=[Depends(verify_token)])
+async def update_schedule_config(req: UpdateScheduleRequest):
+    """更新推送配置 + 动态 reschedule APScheduler"""
+    from scheduler.daily_push import save_schedule_config
+
+    data = {k: v for k, v in req.model_dump().items() if v is not None}
+
+    # 时间范围校验
+    if "push_hour" in data and not (0 <= data["push_hour"] <= 23):
+        raise HTTPException(400, "push_hour 须在 0-23 之间")
+    if "push_minute" in data and not (0 <= data["push_minute"] <= 59):
+        raise HTTPException(400, "push_minute 须在 0-59 之间")
+
+    cfg = await save_schedule_config(data)
+
+    # 动态更新调度器
+    _reschedule_daily_push(cfg)
+
+    return {"ok": True, "config": cfg}
+
+
+@router.post("/schedule-config/test-push", dependencies=[Depends(verify_token)])
+async def test_push():
+    """手动触发一次推送（不检查交易日，用于测试）"""
+    from scheduler.daily_push import DailyPushScheduler
+    pusher = DailyPushScheduler()
+    try:
+        await pusher._push_watchlist_analysis()
+        return {"ok": True, "message": "测试推送已执行"}
+    except Exception as e:
+        raise HTTPException(500, f"推送失败: {e}")
+
+
+def _reschedule_daily_push(cfg: dict):
+    """热更新 APScheduler 推送时间"""
+    try:
+        from apscheduler.triggers.cron import CronTrigger
+        from admin.server import app
+
+        scheduler = getattr(app.state, "scheduler", None)
+        if not scheduler:
+            return
+
+        hour = cfg.get("push_hour", 15)
+        minute = cfg.get("push_minute", 30)
+        scheduler.reschedule_job(
+            "daily_push",
+            trigger=CronTrigger(
+                day_of_week="mon-fri", hour=hour, minute=minute,
+            ),
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("reschedule 失败: %s", e)
+
+
 # ────────────────────── 日志查看 ──────────────────────
 
 
