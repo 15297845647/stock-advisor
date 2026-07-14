@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
     nickname TEXT,
     risk_level TEXT DEFAULT 'moderate',
     trade_style TEXT DEFAULT 'swing',
+    morning_push INTEGER DEFAULT 0,
+    afternoon_push INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -198,11 +200,25 @@ async def get_connection() -> aiosqlite.Connection:
 
 
 async def init_db():
-    """首次启动时建表"""
+    """首次启动时建表 + 增量迁移"""
     conn = await get_connection()
     try:
         await conn.executescript(_SCHEMA_SQL)
+        await _migrate_users_push_columns(conn)
         await conn.commit()
         logger.info("Database initialized at %s", DB_PATH)
     finally:
         await conn.close()
+
+
+async def _migrate_users_push_columns(conn: aiosqlite.Connection):
+    """为已有 users 表补 morning_push / afternoon_push 列"""
+    try:
+        cols = await conn.execute_fetchall("PRAGMA table_info(users)")
+        col_names = {r[1] for r in cols}
+        if "morning_push" not in col_names:
+            await conn.execute("ALTER TABLE users ADD COLUMN morning_push INTEGER DEFAULT 0")
+        if "afternoon_push" not in col_names:
+            await conn.execute("ALTER TABLE users ADD COLUMN afternoon_push INTEGER DEFAULT 0")
+    except Exception as e:
+        logger.warning("users 表迁移跳过: %s", e)

@@ -91,6 +91,8 @@ class CreateUserRequest(BaseModel):
     nickname: str = ""
     risk_level: str = "moderate"
     trade_style: str = "swing"
+    morning_push: bool = False
+    afternoon_push: bool = False
     bot_token: str = ""
     bot_account_id: str = ""
 
@@ -99,6 +101,8 @@ class UpdateProfileRequest(BaseModel):
     nickname: str | None = None
     risk_level: str | None = None
     trade_style: str | None = None
+    morning_push: int | None = None
+    afternoon_push: int | None = None
 
 
 class UpdateBotRequest(BaseModel):
@@ -138,8 +142,10 @@ async def create_user(req: CreateUserRequest):
     conn = await get_connection()
     try:
         await conn.execute(
-            "INSERT INTO users (wechat_id, nickname, risk_level, trade_style) VALUES (?, ?, ?, ?)",
-            (uid, req.nickname or uid, req.risk_level, req.trade_style),
+            "INSERT INTO users (wechat_id, nickname, risk_level, trade_style, morning_push, afternoon_push) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (uid, req.nickname or uid, req.risk_level, req.trade_style,
+             int(req.morning_push), int(req.afternoon_push)),
         )
         await conn.execute(
             "INSERT INTO bots (name, user_id, token, account_id, status) VALUES (?, ?, ?, ?, ?)",

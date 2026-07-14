@@ -56,10 +56,10 @@ class DailyPushScheduler:
         logger.info("[MorningPush] 推荐推送完成")
 
     async def _push_recommendations(self) -> int:
-        """遍历所有用户，为每人生成推荐并推送。返回推送用户数。"""
-        users = await self._get_all_users()
+        """遍历开启晨推的用户，为每人生成推荐并推送。"""
+        users = await self._get_push_users("morning_push")
         if not users:
-            logger.warning("[MorningPush] users 表为空，无推送目标")
+            logger.warning("[MorningPush] 无用户开启晨推")
             return 0
         for wechat_id, profile in users:
             await self._recommend_and_push(wechat_id, profile)
@@ -80,12 +80,13 @@ class DailyPushScheduler:
         except Exception as e:
             logger.error("[MorningPush] 用户 %s 推荐失败: %s", wechat_id, e)
 
-    async def _get_all_users(self) -> list[tuple[str, UserProfile]]:
-        """获取所有用户及其画像"""
+    async def _get_push_users(self, push_type: str) -> list[tuple[str, UserProfile]]:
+        """获取开启了指定推送的用户。push_type: morning_push 或 afternoon_push"""
         conn = await get_connection()
         try:
             rows = await conn.execute_fetchall(
-                "SELECT wechat_id, nickname, risk_level, trade_style FROM users",
+                f"SELECT wechat_id, nickname, risk_level, trade_style "
+                f"FROM users WHERE {push_type} = 1",
             )
             return [
                 (
@@ -128,9 +129,9 @@ class DailyPushScheduler:
         message = f"📊 {date.today()} 收盘行情分析\n\n{overview}"
         message += "\n\n回复股票代码可查看个股详细分析。"
 
-        users = await self._get_all_users()
+        users = await self._get_push_users("afternoon_push")
         if not users:
-            logger.warning("[AfternoonPush] users 表为空，无推送目标")
+            logger.warning("[AfternoonPush] 无用户开启午推")
             return 0
 
         for wechat_id, _ in users:

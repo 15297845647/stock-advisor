@@ -130,6 +130,16 @@
                   <input type="text" x-model="newUser.bot_account_id" placeholder="account_id（可稍后补填）"
                          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40">
                 </div>
+                <div class="col-span-2 flex items-center gap-6 pt-1">
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" x-model="newUser.morning_push" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <span>开启晨推</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" x-model="newUser.afternoon_push" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                    <span>开启午推</span>
+                  </label>
+                </div>
               </div>
               <div class="mt-4 flex items-center gap-3">
                 <button @click="createUser()" class="bg-blue-600 text-white px-5 py-2 rounded-lg text-sm hover:bg-blue-700 transition">创建用户</button>
@@ -146,6 +156,7 @@
                     <th class="px-4 py-3 font-medium">昵称</th>
                     <th class="px-4 py-3 font-medium">风险偏好</th>
                     <th class="px-4 py-3 font-medium">交易风格</th>
+                    <th class="px-4 py-3 font-medium">推送</th>
                     <th class="px-4 py-3 font-medium">Bot 状态</th>
                     <th class="px-4 py-3 font-medium">注册时间</th>
                     <th class="px-4 py-3 font-medium">操作</th>
@@ -158,6 +169,11 @@
                       <td class="px-4 py-3" x-text="u.nickname||'-'"></td>
                       <td class="px-4 py-3" x-text="u.risk_level"></td>
                       <td class="px-4 py-3" x-text="u.trade_style"></td>
+                      <td class="px-4 py-3 space-x-1">
+                        <span x-show="u.morning_push" class="bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded text-xs">晨</span>
+                        <span x-show="u.afternoon_push" class="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-xs">午</span>
+                        <span x-show="!u.morning_push && !u.afternoon_push" class="text-gray-300 text-xs">未开启</span>
+                      </td>
                       <td class="px-4 py-3">
                         <span :class="u.bot_status==='active'?'bg-green-100 text-green-700': u.bot_status==='pending'?'bg-yellow-100 text-yellow-700':'bg-gray-100 text-gray-500'"
                               class="px-2 py-0.5 rounded-full text-xs font-medium"
@@ -201,6 +217,16 @@
                       <option value="swing">波段（养家短线）</option>
                       <option value="long">中长线</option>
                     </select>
+                  </div>
+                  <div class="flex items-center gap-6 pt-1">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" x-model="editProfile.morning_push" true-value="1" false-value="0" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                      <span>晨推</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                      <input type="checkbox" x-model="editProfile.afternoon_push" true-value="1" false-value="0" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                      <span>午推</span>
+                    </label>
                   </div>
                   <button @click="saveProfile()" class="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm hover:bg-blue-700 transition">保存</button>
                   <span x-show="profileSaved" class="text-green-600 text-sm ml-2">已保存</span>
@@ -934,7 +960,7 @@ function admin() {
     editProfile: {},
     profileSaved: false,
     showAddUser: false,
-    newUser: { user_id: '', nickname: '', risk_level: 'moderate', trade_style: 'swing', bot_token: '', bot_account_id: '' },
+    newUser: { user_id: '', nickname: '', risk_level: 'moderate', trade_style: 'swing', morning_push: false, afternoon_push: false, bot_token: '', bot_account_id: '' },
     createUserMsg: '',
     createUserErr: false,
     editBot: { token: '', account_id: '' },
@@ -1067,7 +1093,7 @@ function admin() {
         const d = await r.json();
         if (!r.ok) { this.createUserMsg = d.detail || '创建失败'; this.createUserErr = true; return; }
         this.createUserMsg = `用户 ${d.user_id} 已创建（Bot: ${d.bot_status}），请重启 cc-connect 生效`;
-        this.newUser = { user_id: '', nickname: '', risk_level: 'moderate', trade_style: 'swing', bot_token: '', bot_account_id: '' };
+        this.newUser = { user_id: '', nickname: '', risk_level: 'moderate', trade_style: 'swing', morning_push: false, afternoon_push: false, bot_token: '', bot_account_id: '' };
         await this.loadUsers();
       } catch(e) { this.createUserMsg = '请求失败'; this.createUserErr = true; }
     },
@@ -1086,6 +1112,8 @@ function admin() {
         nickname: d.profile?.nickname || '',
         risk_level: d.profile?.risk_level || 'moderate',
         trade_style: d.profile?.trade_style || 'swing',
+        morning_push: d.profile?.morning_push ? '1' : '0',
+        afternoon_push: d.profile?.afternoon_push ? '1' : '0',
       };
       this.editBot = {
         token: d.bot?.token || '',
@@ -1102,7 +1130,8 @@ function admin() {
     async saveProfile() {
       const id = this.selectedUser?.profile?.wechat_id;
       if (!id) return;
-      await this.api('/api/users/' + id, { method:'PUT', body:JSON.stringify(this.editProfile) });
+      const payload = { ...this.editProfile, morning_push: parseInt(this.editProfile.morning_push) || 0, afternoon_push: parseInt(this.editProfile.afternoon_push) || 0 };
+      await this.api('/api/users/' + id, { method:'PUT', body:JSON.stringify(payload) });
       this.profileSaved = true;
       setTimeout(() => this.profileSaved = false, 2000);
     },
