@@ -25,6 +25,34 @@ from infrastructure.database import get_connection
 
 router = APIRouter(prefix="/api")
 
+
+@router.get('/research/runs', dependencies=[Depends(verify_token)])
+async def research_runs(limit: int = Query(100, ge=1, le=500)):
+    from dataclasses import asdict
+    from repository.research_repository import ResearchRepository
+    from domain.research_settings import research_enabled
+    runs = await ResearchRepository().list_runs(limit)
+    return {'engine': 'v2' if research_enabled() else 'legacy',
+            'runs': [asdict(r) for r in runs]}
+
+
+@router.get('/research/runs/{run_id}', dependencies=[Depends(verify_token)])
+async def research_run(run_id: str):
+    from dataclasses import asdict
+    from repository.research_repository import ResearchRepository
+    repo = ResearchRepository()
+    run = await repo.get_run(run_id)
+    if run is None:
+        raise HTTPException(404, 'research run not found')
+    snapshot = await repo.get_snapshot(run.snapshot_id)
+    return {'run': asdict(run), 'snapshot': asdict(snapshot)}
+
+
+@router.get('/research/evaluations', dependencies=[Depends(verify_token)])
+async def research_evaluations():
+    from repository.research_repository import ResearchRepository
+    return await ResearchRepository().list_evaluations()
+
 LOG_DIR = Path(__file__).resolve().parent.parent / "data" / "logs"
 
 

@@ -115,10 +115,17 @@ class ChatService:
         try:
             recs, summary = await self.recommend_svc.recommend(message, ctx)
         except Exception as e:
+            from domain.research_settings import research_enabled
+            if research_enabled():
+                logger.exception('v2 research screening failed')
+                return '本次筛选未完成，暂不输出候选；请查看数据源状态后重试。'
             logger.exception("推荐流程失败，降级快照对话")
             return await self._unified_chat_with_snapshot(message, ctx)
 
         if not recs:
+            from domain.research_settings import research_enabled
+            if research_enabled():
+                return summary or '本次没有符合条件的候选。'
             # 无推荐时降级快照对话给用户一个响应
             logger.warning("推荐服务无输出，降级快照对话")
             fallback = await self._unified_chat_with_snapshot(message, ctx)

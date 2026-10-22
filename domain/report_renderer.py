@@ -6,6 +6,41 @@
 from datetime import datetime
 
 
+def render_research_report(run, snapshot):
+    """Fact fields are rendered from frozen data; model prose is explicitly unverified."""
+    ids={e.evidence_id for e in snapshot.evidence}
+    d=run.decision
+    if not set(d.supporting_evidence_ids+d.opposing_evidence_ids).issubset(ids):
+        raise ValueError('unknown decision evidence')
+    labels={'eligible':'符合候选条件','observe':'观察','blocked':'数据不足，暂不判断'}
+    lines=[f'# {snapshot.quote.get("name",snapshot.stock_code)}（{snapshot.stock_code}）',
+        f'结论：{labels.get(d.status,d.status)}；记录状态：{run.status}',
+        f'研究周期：{d.horizon_days}个交易日；规则评分：{d.rule_score:.1f}（不是胜率）',
+        f'数据截止：{snapshot.as_of.isoformat()}；行情时间：{snapshot.quote.get("observed_at","未知")}',
+        f'行情价格：{snapshot.quote.get("price","未知")}；模式：{snapshot.market_session}',
+        '## 支持依据']
+    for name,passed in d.metadata.get('checks',{}).items():
+        lines.append(f'- {name}：'+('满足' if passed else '不满足'))
+    for key in ('ma20','ma60','atr14','support','volume_ratio'):
+        if key in d.metadata: lines.append(f'- {key}：{d.metadata[key]}')
+    lines+=['## 反对依据与风险']+['- '+v for v in dict.fromkeys(d.risk_flags+run.errors)]
+    lines+=['## 触发与失效条件']+['- '+v for v in d.trigger_conditions+d.invalidation_conditions]
+    if d.metadata.get('stop_loss'):
+        lines.append(f'- 技术风险参考位：{d.metadata["stop_loss"]:.3f}；触及后仍受实际成交约束')
+    lines+=['## 模型解释（待核实推断，不作为新增事实）']
+    for item in run.annotations:
+        if not set(item['evidence_ids']).issubset(ids): raise ValueError('unknown annotation evidence')
+        lines.append(f'- [{item["stage"]}/{item["stance"]}] {item["text"]}；依据：'+','.join(item['evidence_ids']))
+    lines+=['## 数据完整度与来源', '缺失/限制：'+(', '.join(snapshot.missing_fields) or '未发现关键缺失')]
+    for e in snapshot.evidence:
+        lines.append(f'- [{e.evidence_id}] {e.source}；数据/发布时间：{e.observed_at or e.published_at or "见数据记录"}；获取：{e.fetched_at}')
+        if e.source_url: lines.append(f'  来源地址：{e.source_url}')
+    lines += [f'运行ID：{run.run_id}；策略：{run.strategy_version}；提示词：{run.prompt_version}',
+              f'模型配置：{run.model_id}；数据指纹：{snapshot.content_hash}',
+              '初始策略参数尚待验证；本报告为研究记录。']
+    return '\n'.join(lines)
+
+
 class ReportRenderer:
     """报告 Markdown + HTML 渲染器"""
 
@@ -17,7 +52,7 @@ class ReportRenderer:
         body_html = self._markdown_to_html(report_content)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
         return self._html_template(
-            stock_name, stock_code, depth, body_html, ts,
+            self._escape(stock_name), self._escape(stock_code), self._escape(depth), body_html, ts,
         )
 
     def render_pdf_html(
@@ -28,7 +63,7 @@ class ReportRenderer:
         body_html = self._markdown_to_html(report_content)
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
         return self._pdf_template(
-            stock_name, stock_code, depth, body_html, ts,
+            self._escape(stock_name), self._escape(stock_code), self._escape(depth), body_html, ts,
         )
 
     # ── 简易 markdown → HTML（无依赖）──
@@ -94,7 +129,7 @@ class ReportRenderer:
 <title>{name}（{code}） · Stock Advisor 分析报告</title>
 <style>
   body {{ font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-          max-width: 800px; margin: 20px auto; padding: 20px; color: #333; line-height: 1.7; }}
+          max-width: 800px; margin: 20px auto; padding: 20px; color: #333; line-height: 1.7; overflow-wrap: anywhere; }}
   .header {{ border-bottom: 2px solid #2563eb; padding-bottom: 12px; margin-bottom: 20px; }}
   .header h1 {{ margin: 0; color: #1e40af; }}
   .meta {{ color: #6b7280; font-size: 14px; margin-top: 6px; }}

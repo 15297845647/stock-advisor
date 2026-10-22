@@ -28,6 +28,13 @@ _deep_cache: dict[str, tuple] = {}
 
 
 class AnalysisService:
+    async def analyze_run(self, stock_code: str, depth: ResearchDepth = ResearchDepth.STANDARD,
+                          force: bool = False, **kwargs):
+        from application.research_service import ResearchService
+        if not hasattr(self, '_research'):
+            self._research = ResearchService()
+        return await self._research.analyze_run(stock_code, depth, force, **kwargs)
+
     def __init__(self):
         self.akshare = AKShareClient()
         self.minimax = MiniMaxClient()
@@ -37,6 +44,9 @@ class AnalysisService:
 
     async def analyze_stock(self, stock_code: str, force: bool = False) -> str:
         """综合分析：技术面 + 资金面 + 消息面 → 结构化决策"""
+        from domain.research_settings import research_enabled
+        if research_enabled():
+            return (await self.analyze_run(stock_code, ResearchDepth.STANDARD, force)).report
 
         if not force:
             cached = await self.report_repo.get_today_report(stock_code)
@@ -124,6 +134,10 @@ class AnalysisService:
             STANDARD → 4分析师 + Judge（跳过辩论）
             DEEP     → 完整 Bull/Bear + 三方风控
         """
+        from domain.research_settings import research_enabled
+        if research_enabled():
+            run = await self.analyze_run(stock_code, depth, force)
+            return run.report
         if not force:
             cached = _deep_cache.get(stock_code)
             if cached and cached[0] == date.today() and cached[2] == depth:
