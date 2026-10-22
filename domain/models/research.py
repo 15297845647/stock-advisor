@@ -3,6 +3,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, date
 import hashlib
 import json
+import math
 
 
 def encode(value):
@@ -12,7 +13,12 @@ def encode(value):
 
 
 def json_text(value):
-    return json.dumps(value, default=encode, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    def clean(v):
+        if isinstance(v,float) and not math.isfinite(v): return None
+        if isinstance(v,dict): return {k:clean(x) for k,x in v.items()}
+        if isinstance(v,(list,tuple)): return [clean(x) for x in v]
+        return v
+    return json.dumps(clean(value), default=encode, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
 def digest(value):

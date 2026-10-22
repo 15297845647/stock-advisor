@@ -1,5 +1,6 @@
 """Append-only research runs; evaluation upserts are keyed by execution config."""
 from dataclasses import asdict
+from copy import deepcopy
 from pathlib import Path
 import json
 import aiosqlite
@@ -37,6 +38,9 @@ class ResearchRepository:
             await db.commit()
 
     async def save_run(self, run: AnalysisRun, snapshot: AnalysisSnapshot):
+        checked=deepcopy(snapshot).seal()
+        if checked.content_hash!=snapshot.content_hash or checked.snapshot_id!=snapshot.snapshot_id:
+            raise ValueError('snapshot content hash mismatch')
         if (run.snapshot_id != snapshot.snapshot_id or run.decision.run_id != run.run_id or
                 run.decision.stock_code != snapshot.stock_code):
             raise ValueError('run/snapshot/decision identity mismatch')

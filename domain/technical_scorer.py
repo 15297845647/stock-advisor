@@ -4,6 +4,7 @@
 """
 
 import logging
+import math
 
 from domain.models.candidate import Candidate
 from domain.models.stock import FundFlow, StockDailyBar
@@ -95,7 +96,9 @@ class TechnicalScorer:
     @staticmethod
     def _support_score(price: float, tech: TechnicalSnapshot | None) -> float:
         """距离支撑越近得分越高（表示回踩支撑，反弹机会大）"""
-        if tech is None or not tech.support or tech.support <= 0:
+        if (tech is None or not tech.support or tech.support <= 0
+                or not math.isfinite(price) or price <= 0
+                or not math.isfinite(tech.support) or price < tech.support):
             return 0.0
 
         distance_pct = (price - tech.support) / price

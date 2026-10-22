@@ -67,3 +67,9 @@ class RepositoryTests(unittest.IsolatedAsyncioTestCase):
         db=sqlite3.connect(self.repo.path)
         self.assertEqual(db.execute('SELECT report_content FROM analysis_reports').fetchone()[0],'old')
         db.close()
+
+    async def test_modified_snapshot_cannot_reuse_old_identity(self):
+        s=snapshot();r=run_fixture(s)
+        s.quote['price']=123
+        with self.assertRaisesRegex(ValueError,'hash'):
+            await self.repo.save_run(r,s)

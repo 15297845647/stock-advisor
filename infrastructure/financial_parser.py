@@ -1,7 +1,7 @@
 """Parse indicator-by-period AKShare financial abstract without zero filling."""
 import math
 
-FIELDS = {'revenue': ('营业收入',), 'net_profit': ('净利润', '归母净利润'),
+FIELDS = {'revenue': ('营业收入', '营业总收入'), 'net_profit': ('净利润',),
           'roe': ('净资产收益率(ROE)', '净资产收益率'), 'eps': ('基本每股收益', '每股收益'),
           'bvps': ('每股净资产',), 'revenue_growth': ('营业总收入增长率', '营业收入同比增长'),
           'profit_growth': ('归母净利润增长率', '净利润同比增长')}

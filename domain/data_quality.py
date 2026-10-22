@@ -35,6 +35,8 @@ def validate_snapshot(snapshot):
     last = completed_session(now, snapshot.calendar_dates)
     if not last:
         errors.append('calendar_unknown')
+    elif max(snapshot.calendar_dates)<now.astimezone(SH).date().isoformat():
+        errors.append('calendar_coverage_unknown')
     if not snapshot.quote or not finite(snapshot.quote.get('price'), True):
         errors.append('quote_invalid')
     observed = parse_time(snapshot.quote.get('observed_at'))

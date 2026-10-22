@@ -5,6 +5,10 @@ from zoneinfo import ZoneInfo
 
 
 class DataQualityTests(unittest.TestCase):
+    def test_expired_calendar_cannot_certify_an_old_quote(self):
+        s=self.make()
+        s.calendar_dates=[d for d in s.calendar_dates if d<'2026-10-22']
+        self.assertIn('calendar_coverage_unknown',self.validate(s))
     def setUp(self):
         self.assertIsNotNone(importlib.util.find_spec('domain.data_quality'), 'quality gate is not implemented')
         from tests.fixtures.research import snapshot
