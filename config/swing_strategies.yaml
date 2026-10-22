@@ -1,0 +1,11 @@
+version: swing-v1
+min_bars: 120
+min_amount: 100000000
+horizon_days: 10
+pullback:
+  max_distance: 0.03
+  max_volume_ratio: 0.8
+breakout:
+  min_breakout: 0.01
+  max_breakout: 0.05
+  min_volume_ratio: 1.5

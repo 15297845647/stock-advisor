@@ -55,6 +55,17 @@ class RecommendService:
         失败时返回空列表 + 错误说明。
         """
         wechat_id = ctx.profile.wechat_id if ctx.profile else None
+        from domain.research_settings import research_enabled
+        if research_enabled():
+            from application.research_selection_service import ResearchSelectionService, format_batch
+            exclude = await self._resolve_exclude_codes(wechat_id, message)
+            intent = self.intent_parser.parse(message, ctx, exclude_codes=exclude)
+            pool = self.screener.screen(await _get_spot_df(), intent)
+            pool.sort(key=lambda c: (-c.amount, c.code))
+            codes = [c.code for c in pool[:30]]
+            strategy = 'breakout' if '突破' in message else 'pullback'
+            batch = await ResearchSelectionService().screen(codes, strategy_id=strategy,scope='liquidity_prefilter_top30')
+            return [], '本次对流动性预筛后的最多30只股票做日线研究。\n'+format_batch(batch)
 
         # Layer 1: 意图解析
         exclude = await self._resolve_exclude_codes(wechat_id, message)

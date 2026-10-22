@@ -49,6 +49,10 @@ class FetchResult:
     error: str | None = None                  # 全部失败时的最后错误
     fallback_count: int = 0                   # 经历的降级次数（0 = 首选命中）
     attempts: list[dict] = field(default_factory=list)  # 每次尝试详情（供调试）
+    observed_at: str | None = None
+    fetched_at: str | None = None
+    adjustment: str | None = None
+    quality_flags: list[str] = field(default_factory=list)
 
 
 @dataclass

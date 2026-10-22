@@ -151,6 +151,21 @@ def main():
     p_test = sub.add_parser("test-data", help="测试数据拉取（排查问题）")
     p_test.add_argument("code", help="股票代码，如 601360")
 
+    p_research = sub.add_parser('research', help='新版可追溯个股研究（不发送消息）')
+    p_research.add_argument('code')
+    p_research.add_argument('--depth', choices=['quick','standard','deep'], default='standard')
+    p_research.add_argument('--strategy', choices=['pullback','breakout'], default='pullback')
+    p_research.add_argument('--no-model', action='store_true')
+    p_research.add_argument('--force', action='store_true')
+    p_screen = sub.add_parser('research-screen', help='对明确股票池进行新版筛选，最多30只')
+    p_screen.add_argument('codes', nargs='+')
+    p_screen.add_argument('--strategy', choices=['pullback','breakout'], default='pullback')
+    p_screen.add_argument('--no-model', action='store_true')
+    sub.add_parser('research-evaluate', help='更新已保存研究的5/10/20交易日前向评估')
+    p_replay=sub.add_parser('research-replay',help='离线回放冻结的历史数据集，仅规则，不调用模型')
+    p_replay.add_argument('dataset',help='JSON数据集路径；格式见docs/evidence/acceptance.md')
+    p_replay.add_argument('--strategy',choices=['pullback','breakout'],default='pullback')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -164,8 +179,52 @@ def main():
         "analyze": cmd_analyze,
         "push": cmd_push,
         "test-data": cmd_test_data,
+        'research': cmd_research,
+        'research-screen': cmd_research_screen,
+        'research-evaluate': cmd_research_evaluate,
+        'research-replay':cmd_research_replay,
     }
     cmds[args.command](args)
+
+
+def cmd_research(args):
+    from application.research_service import ResearchService
+    async def execute():
+        run=await ResearchService().analyze_run(args.code,args.depth,args.force,
+            strategy_id=args.strategy,use_model=not args.no_model)
+        print(run.report)
+    asyncio.run(execute())
+
+
+def cmd_research_screen(args):
+    from application.research_selection_service import ResearchSelectionService, format_batch
+    async def execute():
+        result=await ResearchSelectionService().screen(args.codes,strategy_id=args.strategy,use_model=not args.no_model)
+        print(format_batch(result))
+    asyncio.run(execute())
+
+
+def cmd_research_evaluate(args):
+    from application.evaluation_service import EvaluationService
+    from domain.execution_rules import summarize_evaluations
+    from domain.data_quality import SH
+    from datetime import datetime
+    import json
+    async def execute():
+        results=await EvaluationService().evaluate_mature_runs(datetime.now(SH))
+        for window in (5,10,20):
+            for group in ('rules','rules_ai'):
+                subset=[r for r in results if r.horizon_days==window and r.assumptions.get('group')==group]
+                print(json.dumps({'window':window,'group':group,**summarize_evaluations(subset)},ensure_ascii=False))
+    asyncio.run(execute())
+
+
+def cmd_research_replay(args):
+    import json
+    from pathlib import Path
+    from application.historical_research_service import HistoricalResearchService
+    result=asyncio.run(HistoricalResearchService().replay(json.loads(Path(args.dataset).read_text()),args.strategy))
+    print(json.dumps(result,ensure_ascii=False,indent=2))
 
 
 if __name__ == "__main__":

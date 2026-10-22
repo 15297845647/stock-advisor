@@ -47,6 +47,28 @@
 
       <!-- 内容区 -->
       <main class="flex-1 p-8 overflow-auto">
+        <section x-show="page==='research'" class="fade-in">
+          <h2 class="text-xl font-bold mb-4">研究记录与验证</h2>
+          <p class="text-sm text-gray-500 mb-4">查看数据依据、规则结果和模型解释。规则评分不代表胜率。</p>
+          <button @click="loadResearch()" class="px-4 py-2 bg-blue-600 text-white rounded-lg">刷新记录</button>
+          <p class="my-3 text-sm" x-text="researchMsg"></p>
+          <div class="grid md:grid-cols-2 gap-4 mt-4">
+            <div>
+              <template x-for="run in researchRuns" :key="run.run_id">
+                <button @click="researchSelected=run" class="block w-full text-left bg-white border rounded-lg p-3 mb-2">
+                  <strong x-text="run.decision.stock_code+' · '+run.status"></strong>
+                  <p class="text-xs text-gray-500" x-text="run.created_at+' · '+run.depth+' · '+run.group"></p>
+                  <p class="text-sm" x-text="'规则评分 '+run.decision.rule_score+'；'+run.decision.status"></p>
+                </button>
+              </template>
+              <p x-show="!researchRuns.length" class="mt-4 text-gray-500">暂无研究记录。运行一次新版分析后可在这里查看。</p>
+            </div>
+            <pre class="bg-white border rounded-lg p-4 whitespace-pre-wrap break-words text-sm" x-text="researchSelected ? researchSelected.report : '选择一条记录查看完整报告'"></pre>
+          </div>
+          <h3 class="font-medium mt-6">前向评估记录</h3>
+          <p class="text-sm text-gray-500">pending 表示窗口未成熟；unavailable 表示数据或成交条件不足。没有成熟样本时不展示收益结论。</p>
+          <pre class="bg-white border rounded-lg p-4 mt-2 whitespace-pre-wrap text-xs" x-text="JSON.stringify(researchEvaluations,null,2)"></pre>
+        </section>
 
         <!-- Dashboard -->
         <div x-show="page==='dashboard'" class="fade-in">
@@ -1024,6 +1046,16 @@ function admin() {
     },
     _dsRefreshTimer: null,
 
+    researchRuns: [], researchSelected: null, researchEvaluations: [], researchMsg: '',
+    async loadResearch() {
+      try {
+        const data=await this.api('/api/research/runs');
+        if (!data || !Array.isArray(data.runs)) throw new Error('加载失败');
+        this.researchRuns=data.runs;
+        this.researchEvaluations=await this.api('/api/research/evaluations') || [];
+        this.researchMsg='当前默认入口：'+data.engine+'；记录数：'+data.runs.length;
+      } catch(e) { this.researchMsg='研究记录加载失败，请重试。'; }
+    },
     menu: [
       { key: 'dashboard', label: '仪表盘' },
       { key: 'users', label: '用户管理' },
@@ -1032,6 +1064,7 @@ function admin() {
       { key: 'data-sources', label: '数据源' },
       { key: 'logs', label: '日志查看' },
       { key: 'config', label: '配置管理' },
+      { key: 'research', label: '研究记录与验证' },
     ],
 
     async init() {
@@ -1042,6 +1075,7 @@ function admin() {
       this.menu[4].load = () => this.loadDataSources();
       this.menu[5].load = () => this.loadLogFiles();
       this.menu[6].load = () => this.loadConfig();
+      this.menu[7].load = () => this.loadResearch();
       if (this.token) await this.loadDashboard();
     },
 

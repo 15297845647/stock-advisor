@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>完整示例（600000） · Stock Advisor 分析报告</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+          max-width: 800px; margin: 20px auto; padding: 20px; color: #333; line-height: 1.7; overflow-wrap: anywhere; }
+  .header { border-bottom: 2px solid #2563eb; padding-bottom: 12px; margin-bottom: 20px; }
+  .header h1 { margin: 0; color: #1e40af; }
+  .meta { color: #6b7280; font-size: 14px; margin-top: 6px; }
+  .depth-badge { display: inline-block; background: #dbeafe; color: #1e40af;
+                  padding: 2px 10px; border-radius: 12px; font-size: 12px; margin-left: 8px; }
+  h1 { font-size: 22px; } h2 { font-size: 18px; color: #374151;
+                                  border-left: 4px solid #2563eb; padding-left: 10px; margin-top: 24px; }
+  p { margin: 4px 0; }
+  ul { margin: 6px 0; padding-left: 24px; }
+  .footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid #e5e7eb;
+             color: #9ca3af; font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>完整示例（600000）<span class="depth-badge">快速</span></h1>
+    <div class="meta">生成时间: 2026-10-22 09:43</div>
+  </div>
+  <div class="content">
+    <h1>合成测试数据，仅检查展示与状态</h1>
+<h1>合成测试 · 完整示例（600000）</h1>
+<p>结论：符合候选条件；记录状态：complete</p>
+<p>研究周期：10个交易日；规则评分：100.0（不是胜率）</p>
+<p>数据截止：2026-10-22T16:00:00+08:00；行情时间：2026-10-22T15:00:00+08:00</p>
+<p>行情价格：11.39；模式：closed</p>
+<h2>支持依据</h2>
+<ul>
+<li>非ST：满足</li>
+<li>未停牌：满足</li>
+<li>有成交：满足</li>
+<li>流动性：满足</li>
+<li>MA20高于MA60：满足</li>
+<li>MA20上行：满足</li>
+<li>未跌破均线且回踩距离合格：满足</li>
+<li>回踩缩量：满足</li>
+<li>ma20：11.295</li>
+<li>ma60：11.095</li>
+<li>atr14：0.3999999999999986</li>
+<li>support：11.0</li>
+<li>volume_ratio：0.5</li>
+</ul>
+<h2>反对依据与风险</h2>
+<h2>触发与失效条件</h2>
+<ul>
+<li>非ST</li>
+<li>未停牌</li>
+<li>有成交</li>
+<li>流动性</li>
+<li>MA20高于MA60</li>
+<li>MA20上行</li>
+<li>未跌破均线且回踩距离合格</li>
+<li>回踩缩量</li>
+<li>收盘跌破MA20 (11.295)，重新评估</li>
+<li>技术风险参考位：11.000；触及后仍受实际成交约束</li>
+</ul>
+<h2>模型解释（待核实推断，不作为新增事实）</h2>
+<ul>
+<li>[explain/support] 合成测试解释，不代表真实市场判断；依据：bars</li>
+</ul>
+<h2>数据完整度与来源</h2>
+<p>缺失/限制：未发现关键缺失</p>
+<ul>
+<li>[bars] fixture；数据/发布时间：见数据记录；获取：2026-10-22T16:00:00+08:00</li>
+<li>[quote] fixture；数据/发布时间：见数据记录；获取：2026-10-22T16:00:00+08:00</li>
+<li>[news-0] synthetic_fixture；数据/发布时间：2026-10-22T10:00:00+08:00；获取：2026-10-22T16:00:00+08:00</li>
+</ul>
+<p>运行ID：59f29d8c-174d-4918-8f78-cb738613c970；策略：swing-v1:fd6f725512d6；提示词：evidence-v1</p>
+<p>模型配置：offline_fixture；数据指纹：ce7ec08b6ea8bd439b962761bd9a8dbb792705b515db52d5b005ae01a5e8ab8f</p>
+<p>初始策略参数尚待验证；本报告为研究记录。</p>
+  </div>
+  <div class="footer">
+    ⚠️ 本报告由 AI 生成，仅供参考，不构成投资建议。投资有风险，决策需谨慎。<br/>
+    Stock Advisor · A股/期货 AI 分析系统
+  </div>
+</body>
+</html>

@@ -204,6 +204,8 @@ async def init_db():
     conn = await get_connection()
     try:
         await conn.executescript(_SCHEMA_SQL)
+        from repository.research_repository import SCHEMA as RESEARCH_SCHEMA
+        await conn.executescript(RESEARCH_SCHEMA)
         await _migrate_users_push_columns(conn)
         await conn.commit()
         logger.info("Database initialized at %s", DB_PATH)
