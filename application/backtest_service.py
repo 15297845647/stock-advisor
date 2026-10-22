@@ -22,6 +22,17 @@ class BacktestService:
 
     async def run_backtest(self, days: int = 30, window: int = 5) -> str:
         """对近 N 天的历史建议做回测"""
+        from domain.research_settings import research_enabled
+        if research_enabled():
+            from application.evaluation_service import EvaluationService
+            from domain.execution_rules import summarize_evaluations
+            from domain.data_quality import SH
+            from datetime import datetime
+            import json
+            results = await EvaluationService().evaluate_mature_runs(datetime.now(SH),(window,))
+            groups={g:summarize_evaluations([r for r in results if r.assumptions.get('group')==g])
+                    for g in ('rules','rules_ai')}
+            return '新版前向评估（逐信号统计，非组合收益）\n'+json.dumps(groups,ensure_ascii=False)
         since = (date.today() - timedelta(days=days)).isoformat()
 
         conn = await get_connection()
@@ -59,9 +70,6 @@ class BacktestService:
                 if b.trade_date == report_dt:
                     entry_price = b.close
                     break
-            if not entry_price and bars:
-                entry_price = bars[-1].close
-
             if not entry_price:
                 continue
 

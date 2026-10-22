@@ -1,0 +1,22 @@
+version: daily-conservative-v1
+benchmark: CSI300
+capital: 100000
+lot_size: 100
+slippage_bps: 5
+# Scenario assumptions, NOT the user's actual commission schedule.
+# Require dated daily limit prices and corporate-action metadata in each input bar.
+fee_schedule:
+  - effective_from: '2023-08-28'
+    commission: 0.0003
+    min_commission: 5
+    transfer_fee: 0.00001
+    stamp_tax_sell: 0.0005
+sources:
+  stamp_tax: https://fgk.chinatax.gov.cn/zcfgk/c102416/c5211343/content.html
+  settlement: https://www.csrc.gov.cn/hubei/c105451/c1292890/content.shtml
+  transfer_fee_notice: https://download.gjzq.com.cn/gonggao/nr/CSDC_About_Transfer_Fee_Decrease_Tips.html
+limitations:
+  - commission_and_slippage_are_scenarios
+  - unsupported_corporate_actions_excluded
+  - daily_bar_fill_order_unknown_stop_first
+  - per_signal_statistics_not_a_shared_capital_portfolio
